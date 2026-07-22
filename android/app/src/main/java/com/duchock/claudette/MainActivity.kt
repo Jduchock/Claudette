@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
@@ -26,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -38,6 +38,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.duchock.claudette.service.WakeWordService
+import com.duchock.claudette.ui.SettingsActivity
 import com.duchock.claudette.util.Prefs
 
 class MainActivity : ComponentActivity() {
@@ -46,9 +47,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    ClaudetteScreen()
-                }
+                Surface(modifier = Modifier.fillMaxSize()) { ClaudetteScreen() }
             }
         }
     }
@@ -68,9 +67,7 @@ class MainActivity : ComponentActivity() {
         ) { result ->
             if (result[Manifest.permission.RECORD_AUDIO] == true) {
                 startListening(); listening = true
-            } else {
-                listening = false
-            }
+            } else listening = false
         }
 
         Column(
@@ -82,42 +79,37 @@ class MainActivity : ComponentActivity() {
             Spacer(Modifier.height(8.dp))
             Text(
                 if (listening) "Listening for \"Claudette\"..." else "Idle",
-                style = MaterialTheme.typography.bodyLarge,
-                textAlign = TextAlign.Center
+                style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center
             )
             Spacer(Modifier.height(40.dp))
 
             Button(
                 onClick = {
-                    if (listening) {
-                        stopListening(); listening = false
-                    } else if (hasAudioPermission()) {
-                        startListening(); listening = true
-                    } else {
-                        launcher.launch(permissions)
-                    }
+                    if (listening) { stopListening(); listening = false }
+                    else if (hasAudioPermission()) { startListening(); listening = true }
+                    else launcher.launch(permissions)
                 },
                 modifier = Modifier.height(56.dp)
             ) {
-                Icon(
-                    if (listening) Icons.Filled.Mic else Icons.Filled.MicOff,
-                    contentDescription = null
-                )
+                Icon(if (listening) Icons.Filled.Mic else Icons.Filled.MicOff, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text(if (listening) "Stop listening" else "Start listening")
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(16.dp))
             OutlinedButton(onClick = { testWake() }, enabled = listening) {
                 Text("Test wake (simulate)")
             }
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = {
+                startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
+            }) { Text("Settings (API keys & voice)") }
 
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(24.dp))
             Text(
-                "Phase 1 skeleton -- the openWakeWord model isn't loaded yet, so the mic " +
-                    "won't trigger on its own. Use \"Test wake\" to exercise the pipeline.",
-                style = MaterialTheme.typography.bodySmall,
-                textAlign = TextAlign.Center
+                "Set your Anthropic + ElevenLabs keys and a voice ID in Settings. Until the " +
+                    "openWakeWord model is added, use \"Test wake\" to start a conversation.",
+                style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center
             )
         }
     }

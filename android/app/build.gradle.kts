@@ -12,7 +12,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "0.1"
+        versionName = "0.2"
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -52,7 +52,13 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
 
-    // Secure key storage (Phase 4) -- Anthropic / ElevenLabs keys, ref threat S1
+    // Coroutines
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // Networking (Anthropic + ElevenLabs REST)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // Secure key storage -- Anthropic / ElevenLabs keys, ref threat S1
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     // openWakeWord on-device inference (Phase 1b)

@@ -99,4 +99,26 @@ Threats are logged here as they are identified during construction. Severity: �
 - User chose to paste a token; **new threat S7** logged for credential handling (fine-grained, repo-scoped, short expiry, in-memory only, revoke after).
 - Repo structure prepared and committed locally on `main`: `README.md`, `android/` (the Kotlin app), `docs/` (this log + the Word spec). Root `.gitignore` excludes build output and secret files.
 - **Going forward the GitHub repo is the source of truth** — future sessions clone/pull it; the docs live under `docs/` and are updated there.
-- **Next:** push to the user's repo, confirm it landed, user revokes the token and deletes the local folder; then resume with Phase 1b / Phase 2 from the repo.
+- **Outcome:** the pasted token could **not** be used from the cloud container. This environment's git proxy (`CCR_AGENT_PROXY_ENABLED=1`) overrides the Authorization header and gates GitHub by repo ("GitHub access to this repository is not enabled for this session. Use add_repo…"). No `add_repo`/repo-grant tool is exposed to the session, so a push from here is not possible without the repo being enabled at the Claude-app level.
+- **Pivot:** delivered a ready-to-push bundle `Claudette-git-repo.zip` (full `.git` history, remote preset to the tokenless HTTPS URL, one commit on `main`). User pushes from their own machine where their GitHub auth + network already work — no token needed in-session. Verified no token string leaked into the repo/`.git`.
+- **S7 action:** the pasted PAT was transmitted to the session but never usable; user to **revoke it now** regardless.
+- **Future "resume in github":** because the cloud session can't reach the repo directly, either (a) connect GitHub as a connector / enable the repo for the session so I can pull/push directly, or (b) continue the hand-off pattern (I commit in-container, user pushes). To be decided.
+- **Next:** user pushes `main`, confirms on github.com/Jduchock/Claudette, revokes the token, deletes the local working folder; then resume Phase 1b / Phase 2.
+
+### 2026-07-22 — Session 5: Phase 2 decisions + framework build
+- User confirmed the push to GitHub **landed with no errors**. Repo is live at github.com/Jduchock/Claudette.
+- Requested twice-daily push reminders (noon + 4 PM Central); the scheduled-task creation was **declined at the approval prompt** — deferred until the user approves it. (Reminders fire from the cloud and push to reachable devices; cannot be truly gated to "only at this computer.")
+- Provided the openWakeWord training link; user training `claudette.onnx` (~1 hr run).
+- **Phase 2 decisions captured:**
+  - **D8 Model routing:** *auto-escalate* — Sonnet by default, switch to Opus when a complexity heuristic fires.
+  - **D9 Memory:** remember recent turns; reset after an idle gap.
+  - **D10 Follow-ups:** *stay open until dismissed* — full conversation mode; keeps listening turn-to-turn until a dismiss phrase or Stop.
+  - **D11 API keys:** on-device, encrypted (EncryptedSharedPreferences), entered via a settings screen.
+- Built the Phase 2 framework (delivered as a repo update to pull in): `ClaudeClient`, `ElevenLabsClient`, `AndroidSpeechToText` (+`SpeechToText` seam), `TtsPlayer`, `Persona`, `Router` (escalation heuristic), `ConversationManager` (memory + idle reset), a rewritten `WakeWordService` conversation loop, and a `SettingsActivity` for keys/voice.
+- **Open items to resolve on the device:**
+  - **Model IDs** (`Router.SONNET` / `Router.OPUS`) are placeholders — must be set to the current Anthropic model IDs (present-day values; verify against docs).
+  - **ElevenLabs voice ID** — user picks a female voice and enters it in Settings.
+  - **Persona/humor** — a witty default is shipped in `Persona`; tune to taste.
+  - **Streaming** (SSE for Claude, chunked TTS) deferred to Phase 2b; the framework does a correct non-streaming round-trip first.
+  - **Security S8 (new):** keys entered in Settings live in EncryptedSharedPreferences; TTS/STT audio and transcripts are not persisted. STT uses Android's recognizer (routes to Google — S3).
+- **Next:** user finishes training + drops the 3 ONNX models in `assets/models/`; I implement the openWakeWord inference (Phase 1b) and we test the full loop on-device.
