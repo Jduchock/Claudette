@@ -122,3 +122,14 @@ Threats are logged here as they are identified during construction. Severity: �
   - **Streaming** (SSE for Claude, chunked TTS) deferred to Phase 2b; the framework does a correct non-streaming round-trip first.
   - **Security S8 (new):** keys entered in Settings live in EncryptedSharedPreferences; TTS/STT audio and transcripts are not persisted. STT uses Android's recognizer (routes to Google — S3).
 - **Next:** user finishes training + drops the 3 ONNX models in `assets/models/`; I implement the openWakeWord inference (Phase 1b) and we test the full loop on-device.
+
+### 2026-07-22 — Session 6: Wake-word training (browser-driven) + TOGAF assessment
+- Wake word set by user: `target_word = "klau_dette"` (phonetic spelling of Claudette) in the openWakeWord "simple" automatic-training Colab.
+- Claude drove the run via the Chrome browser tools on the user's own Colab copy: cleared 3 stale Colab sessions, launched Run all.
+- **Blocker found & fixed — real dependency conflict.** The notebook (2026-04-11) installs `numba` (needs `numpy<2.1`) *and* `onnx2tf` (needs `numpy==2.2.6`); irreconcilable, so every Run-all reinstalled numpy and re-armed the "restart runtime" prompt — an infinite loop (the same one the user hit earlier). **Fix:** commented out the `!pip install onnx2tf` line via Colab Find & Replace. `onnx2tf` is only for the optional TFLite export; we only need the `.onnx`. After one final settling restart, installs cleared with numpy stable at 2.0.2 → loop broken.
+- Non-fatal: the **AudioSet** noise download 404'd (dataset URL moved upstream); notebook skips it gracefully (one fewer background-noise source, still trains well). The 16 GB pre-computed feature set + validation set downloaded fine.
+- Training (cell 3) started clean: generating 1,000 synthetic "klau_dette" clips → 10,000 training steps (~30–60 min, CPU runtime). Output → `/content/my_custom_model/klau_dette.onnx`. A harmless TFLite/onnx2tf error is expected at the very end (export disabled); the `.onnx` is written before it.
+- **Security note S9:** trained on the notebook's "small sample" datasets → resulting model is **non-commercial personal use** only (mixed dataset licenses, per the notebook's own warning).
+- User will self-monitor the run and signal when to resume; the auto check-in was cancelled at user request.
+- Created **`docs/Claudette_TOGAF_Assessment.docx`** — TOGAF conformance assessment + prioritized gap analysis (new deliverable, this session).
+- **Next (on resume):** collect `klau_dette.onnx` (+ shared `melspectrogram.onnx` / `embedding_model.onnx`) → `android/app/src/main/assets/models/` → implement openWakeWord ONNX inference in `OpenWakeWordDetector` (Phase 1b) → device test.

@@ -1,11 +1,9 @@
-Drop the three openWakeWord ONNX models here:
+openWakeWord models used by OpenWakeWordDetector:
 
-  melspectrogram.onnx     (shared -- from the openWakeWord repo release assets)
-  embedding_model.onnx    (shared -- from the openWakeWord repo release assets)
-  claudette.onnx          (YOUR trained wake-word model from the training Colab)
+  melspectrogram.onnx   (shared, from openWakeWord release / mirror)  ~1.0 MB
+  embedding_model.onnx  (shared, Google speech embedding)             ~1.3 MB
+  claudette.onnx        (YOUR trained "klau_dette" wake word)         ~0.2 MB
 
-The melspectrogram + embedding models are the same for every wake word and are
-published with openWakeWord. claudette.onnx is the one you train.
-
-Until all three are present, OpenWakeWordDetector runs in NO-OP mode and the app's
-"Test wake" button is used to exercise the pipeline.
+All three are bundled in the app. To retrain the wake word later (e.g. higher
+number_of_examples), replace claudette.onnx with the new file (keep the name),
+or update the WW constant in OpenWakeWordDetector.kt.
