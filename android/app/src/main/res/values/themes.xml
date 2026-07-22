@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.Claudette" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#12131A</item>
+        <item name="android:windowBackground">#12131A</item>
+    </style>
+</resources>

@@ -1,0 +1,13 @@
+# Android / Gradle
+.gradle/
+**/build/
+/captures
+local.properties
+*.iml
+.idea/
+.DS_Store
+.externalNativeBuild
+.cxx
+# Never commit secrets
+*.token
+secrets.properties
