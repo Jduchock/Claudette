@@ -9,10 +9,10 @@ class ClaudetteApp : Application() {
         super.onCreate()
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Claudette listening",
+            "Nova listening",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Shows while Claudette is actively listening for the wake word."
+            description = "Shows while Nova is actively listening for the wake word."
             setShowBadge(false)
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)

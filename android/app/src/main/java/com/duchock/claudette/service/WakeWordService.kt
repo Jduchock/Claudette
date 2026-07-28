@@ -24,8 +24,9 @@ import com.duchock.claudette.net.ElevenLabsClient
 import com.duchock.claudette.speech.AndroidSpeechToText
 import com.duchock.claudette.speech.SpeechToText
 import com.duchock.claudette.speech.TtsPlayer
+import com.duchock.claudette.util.DebugStatus
 import com.duchock.claudette.util.Prefs
-import com.duchock.claudette.util.SecretStore
+import com.duchock.claudette.util.Secrets
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -57,7 +58,9 @@ class WakeWordService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         detector = OpenWakeWordDetector(applicationContext)
-        detector.initialize()
+        val loaded = detector.initialize()
+        DebugStatus.wakeModelLoaded = loaded
+        DebugStatus.event(if (loaded) "Wake model loaded" else "Wake model MISSING")
         stt = AndroidSpeechToText(applicationContext)
         tts = TtsPlayer(applicationContext)
     }
@@ -76,13 +79,17 @@ class WakeWordService : LifecycleService() {
         startForegroundWithNotification(LISTENING_TEXT)
         acquireWakeLock()
         startCapture()
+        DebugStatus.listening = true
+        DebugStatus.event("Listening for \"Nova\"")
         Log.i(TAG, "Listening started")
     }
 
     private fun startCapture() {
         if (capture != null || inConversation.get()) return
         capture = AudioCapture(detector.frameSize) { frame ->
-            if (detector.process(frame).detected) onWakeDetected()
+            val result = detector.process(frame)
+            DebugStatus.lastWakeScore = result.score
+            if (result.detected) onWakeDetected()
         }.also { it.start() }
     }
 
@@ -94,21 +101,25 @@ class WakeWordService : LifecycleService() {
         stopCapture()
         releaseWakeLock()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        DebugStatus.listening = false
+        DebugStatus.event("Stopped")
         Log.i(TAG, "Listening stopped")
     }
 
     /** Wake fired -> run the conversation loop. */
     private fun onWakeDetected() {
         if (!inConversation.compareAndSet(false, true)) return
-        Log.i(TAG, "Wake word 'Claudette' detected")
+        Log.i(TAG, "Wake word 'Nova' detected")
+        DebugStatus.event("Wake detected (%.2f)".format(DebugStatus.lastWakeScore))
         stopCapture() // free the mic for SpeechRecognizer
 
-        val anthropicKey = SecretStore.get(this, SecretStore.KEY_ANTHROPIC)
-        val elevenKey = SecretStore.get(this, SecretStore.KEY_ELEVENLABS)
-        val voiceId = Prefs.voiceId(this)
+        val anthropicKey = Secrets.anthropicKey(this)
+        val elevenKey = Secrets.elevenLabsKey(this)
+        val voiceId = Secrets.voiceId(this)
 
-        if (anthropicKey.isNullOrBlank() || elevenKey.isNullOrBlank() || voiceId.isBlank()) {
-            Log.w(TAG, "Missing keys/voice -- open Settings to configure. Aborting turn.")
+        if (anthropicKey.isBlank() || elevenKey.isBlank() || voiceId.isBlank()) {
+            Log.w(TAG, "Missing keys/voice -- set them in local.properties (or Settings). Aborting turn.")
+            DebugStatus.event("Missing keys/voice — check local.properties")
             endConversation()
             return
         }
@@ -122,27 +133,35 @@ class WakeWordService : LifecycleService() {
             try {
                 var emptyStreak = 0
                 while (inConversation.get()) {
+                    DebugStatus.event("Listening for your request…")
                     val utterance = stt.listenOnce()
                     if (utterance.isNullOrBlank()) {
                         // two silent listens in a row -> assume the user walked away
+                        DebugStatus.event("Heard nothing")
                         if (++emptyStreak >= 2) break else continue
                     }
                     emptyStreak = 0
+                    DebugStatus.event("Heard: \"$utterance\"")
                     if (Dismiss.isDismiss(utterance)) {
                         eleven.synthesize("Okay. I'm here when you need me.", voiceId)?.let { tts.play(it) }
                         break
                     }
+                    DebugStatus.event("Thinking…")
                     val reply = conversation.handle(utterance)
                     if (reply == null) {
+                        DebugStatus.event("Claude call failed (see ClaudeClient log)")
                         eleven.synthesize("Sorry, I hit a snag reaching my brain. Try me again.", voiceId)
                             ?.let { tts.play(it) }
                         continue
                     }
+                    DebugStatus.event("Speaking: \"${reply.take(60)}\"")
                     val audio = eleven.synthesize(reply, voiceId)
-                    if (audio != null) tts.play(audio) else Log.w(TAG, "TTS returned no audio")
+                    if (audio != null) tts.play(audio)
+                    else { Log.w(TAG, "TTS returned no audio"); DebugStatus.event("ElevenLabs returned no audio (voice ID?)") }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Conversation loop error", e)
+                DebugStatus.event("Error: ${e.message ?: e.javaClass.simpleName}")
             } finally {
                 endConversation()
             }
@@ -180,7 +199,7 @@ class WakeWordService : LifecycleService() {
             PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, ClaudetteApp.CHANNEL_ID)
-            .setContentTitle("Claudette")
+            .setContentTitle("Nova")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_stat_mic)
             .setOngoing(true)
@@ -212,7 +231,7 @@ class WakeWordService : LifecycleService() {
     companion object {
         private const val TAG = "WakeWordService"
         private const val NOTIF_ID = 1001
-        private const val LISTENING_TEXT = "Listening -- say \"Claudette\""
+        private const val LISTENING_TEXT = "Listening -- say \"Nova\""
         private const val CONVERSING_TEXT = "Listening to you..."
         const val ACTION_STOP = "com.duchock.claudette.STOP"
         const val ACTION_TEST_WAKE = "com.duchock.claudette.TEST_WAKE"

@@ -57,7 +57,7 @@ class SettingsActivity : ComponentActivity() {
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text("Claudette settings", style = MaterialTheme.typography.headlineSmall)
+            Text("Nova settings", style = MaterialTheme.typography.headlineSmall)
             Text(
                 "Keys are stored encrypted on this device (Android Keystore). They are never " +
                     "sent anywhere except directly to Anthropic and ElevenLabs.",

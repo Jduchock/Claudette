@@ -41,6 +41,8 @@ class AudioCapture(
         rec.startRecording()
         worker = thread(name = "claudette-audio") {
             val buf = ShortArray(frameSize)
+            var dbgFrames = 0
+            var dbgPeak = 0
             while (running) {
                 var read = 0
                 while (read < frameSize && running) {
@@ -48,7 +50,18 @@ class AudioCapture(
                     if (n <= 0) break
                     read += n
                 }
-                if (read == frameSize) onFrame(buf.copyOf())
+                if (read == frameSize) {
+                    // DEBUG mic level meter: peak sample amplitude, logged ~every 2s
+                    for (i in 0 until frameSize) {
+                        val amp = kotlin.math.abs(buf[i].toInt())
+                        if (amp > dbgPeak) dbgPeak = amp
+                    }
+                    if (++dbgFrames >= 25) {
+                        Log.i(TAG, "DBG mic peak amplitude=$dbgPeak (max 32767)")
+                        dbgFrames = 0; dbgPeak = 0
+                    }
+                    onFrame(buf.copyOf())
+                }
             }
         }
     }

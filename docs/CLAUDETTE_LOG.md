@@ -9,10 +9,10 @@
 
 | Item | Value |
 |------|-------|
-| Goal | Installable Android APK: always-on voice companion, wake word **"Claudette"**, female voice, sense of humor, hands-free |
+| Goal | Installable Android APK: always-on voice companion, wake word **"Nova"** (spoken name; code/model files still named "claudette"), female voice, sense of humor, hands-free |
 | Owner | John Duchock (duchockj@gmail.com) |
 | Workspace | `C:\a_claudette` |
-| Status | **Phase 1 — Listening skeleton (framework delivered)** |
+| Status | **Phase 2 — voice framework in place; wake-model retraining, blocked on a clean training run (see Session 8)** |
 | Started | 2026-07-22 |
 
 ---
@@ -133,3 +133,74 @@ Threats are logged here as they are identified during construction. Severity: �
 - User will self-monitor the run and signal when to resume; the auto check-in was cancelled at user request.
 - Created **`docs/Claudette_TOGAF_Assessment.docx`** — TOGAF conformance assessment + prioritized gap analysis (new deliverable, this session).
 - **Next (on resume):** collect `klau_dette.onnx` (+ shared `melspectrogram.onnx` / `embedding_model.onnx`) → `android/app/src/main/assets/models/` → implement openWakeWord ONNX inference in `OpenWakeWordDetector` (Phase 1b) → device test.
+
+### 2026-07-24 — Session 7: Rename Claudette → "Nova" + 13k model integrated + Phase 1b inference
+- **Identity change:** assistant renamed **Claudette → "Nova"** ("Neural On-demand Voice Assistant"). `Persona.kt` system prompt rewritten so she introduces herself as Nova and states the acronym when asked. User-facing strings across `MainActivity` / `WakeWordService` / `ClaudetteApp` / `SettingsActivity` updated to "Nova" (title, "Listening for Nova", notification text/channel, "Nova settings"). **Internal identifiers left unchanged** — package `com.duchock.claudette`, class names, prefs keys, and the wake-model filename `claudette.onnx` all stay as-is to avoid a churny refactor. So "Nova" is the product/spoken name; "claudette" persists in code paths.
+- **Phase 1b done — openWakeWord inference implemented.** `OpenWakeWordDetector.kt` now runs the real 3-model ONNX streaming pipeline: `melspectrogram.onnx` -> `embedding_model.onnx` -> wake model (`claudette.onnx`); 1280-sample (80 ms) frames, mel window 76, 16-embedding wake window, input `[1,16,96]` -> output `[1,1]` probability, threshold 0.5, ~2 s cooldown. Ported faithfully from the Python reference.
+- **13k model integrated but DEAD.** User trained a wake model on another computer at only **13,000 examples**, producing `nova.onnx` + `nova.tflite`; placed into `android/app/src/main/assets/models/` as `claudette.onnx`. On device the **wake word does not trigger** — peak wake score ~**0.0009-0.0011** even while speaking "nova" at the mic. Mic path verified healthy (temp debug amplitude meter in `AudioCapture` showed 150 -> 5757 on speech; temp peak-wake-score log added in `OpenWakeWordDetector`). Conclusion: the model is undertrained, not a mic/code bug. -> Retrain at higher example counts.
+- **Security:** S7 (GitHub PAT pasted earlier) **still to be revoked** by the user. No new keys introduced.
+- **Next:** retrain the wake model with far more examples (aim 30k-50k), swap the new `nova.onnx` in as `claudette.onnx`, rebuild, re-test.
+
+### 2026-07-24 -> 25 — Session 8: Wake-model retraining marathon (40k -> 25k) — four runtime losses, root cause found
+**Goal:** produce a *working* "nova" wake model to replace the dead 13k one, via the openWakeWord "simple" auto-training Colab, Claude driving through the Chrome tools.
+
+**Notebook fixes (version drift) — now baked into the user's Colab copy:**
+- Colab defaults to Python 3.12 but `piper-phonemize` only ships a **cp311** wheel -> pinned the Colab runtime to the **2025.07** image (Python 3.11).
+- `rhasspy/piper-sample-generator` restructured upstream (`generate_samples` moved/renamed, signature changed) -> pinned the clone to commit **`213d4d5`** (last commit with the flat `generate_samples.py` + old signature).
+- PyTorch >=2.6 flipped `torch.load(weights_only=True)` by default -> `UnpicklingError` on the Piper voice model. Fixed via a top patch cell setting **`os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"]="1"`** *and* monkeypatching `torch.load`. The **env var is the key** — sample generation runs in a **subprocess** the monkeypatch alone doesn't reach.
+- Commented out the `tensorflow-cpu` / `tensorflow_probability` / `onnx_tf` / `onnx2tf` install stack (only needed for the optional `.tflite` export; those installs re-trigger the numpy "restart runtime" loop).
+- Runtime = **T4 GPU**. Standing rule during a run: the recurring **"Restart session" / backports** popup -> always **Cancel**, never Restart (Restart wipes the runtime). The AudioSet `.tar` 404 is harmless/expected.
+
+**What happened — the pipeline works end-to-end, but the runtime was lost at the finish four times:**
+1. **40k run #1** (user out): completed features + main training (100%), but the **runtime was recycled during the final phase** before `nova.onnx` could be downloaded; reconnect -> fresh empty runtime -> total loss.
+2. **40k run #2:** restarted; lost again to a disconnect near the end.
+3. **25k run** (home, unstable Wi-Fi): sliders dialed down to **25,150 examples / 25,800 steps** to shorten exposure. Wi-Fi dropped long enough that Colab reclaimed the runtime -> loss.
+4. **25k run #2** (home, on mobile **hotspot** next to him — a stable pipe): ran cleanly to **main training 100% (25,799/25,800)** and into the short 2nd phase (~5%), then the frontend froze and the runtime was gone; reconnect -> fresh empty runtime -> loss again.
+
+**Root cause identified:** the **"Automatic saving failed — updated remotely or in another tab"** banner was up the *entire* final run -> the notebook was **open in two browser tabs at once**. Colab lets only one tab own the runtime, so the two fought over the connection, desyncing the display and dropping the runtime right at the buzzer. **This — not the user's network — is the most likely killer** (hotspot was stable and adjacent).
+
+**Model verification (avoids a false win):** an auto-downloaded `nova.onnx` (206,276 B) + `nova.tflite` were found in `Downloads`. Verified on-device: **byte-identical (MD5 `b877...`) to the `claudette.onnx` already installed in the app**, timestamp matching the **13k import** — i.e. the **same dead 13k model**, NOT a product of today's runs. (Structurally valid: input `[1,16,96]` -> output `[1,1]`, passes the ONNX checker — just undertrained.) The older `klau_dette.onnx` (MD5 `c927...`, 07-22) is a distinct earlier model. **Net: no good model was produced today; the app still holds the dead 13k model.**
+
+**Plan for the next attempt (should land cleanly):**
+- **Exactly ONE Colab tab open**, nothing else pointed at the notebook — removes the two-tab connection fight (probable root cause).
+- Add a **Google Drive mount + save** at the end of the notebook so `nova.onnx` persists to Drive the instant it's written — a fluke disconnect can no longer rob us. (Needs one Google "Allow" click from the user at run start; Claude cannot/should not click it.)
+- Keep the machine awake + on a stable connection for the full run; be present for the final ~10 min (the download).
+- Sliders: 25k is workable and shorter; 30k-50k is the notebook's recommended sweet spot if sensitivity still feels weak.
+- **Swap procedure when a good `nova.onnx` lands:** replace `android/app/src/main/assets/models/claudette.onnx` with the new file **keeping the `claudette.onnx` filename** (the `WW` constant in `OpenWakeWordDetector` expects it) -> rebuild -> test "nova".
+- **Fallback:** build the model on a **guaranteed-uptime work VM** (sidesteps the disconnect problem entirely). NOTE: **Claude (this personal account) is not to be used in the work environment** — per the user, work and personal projects stay separate. A work-VM run is done solo; these docs are written to be run without Claude.
+- **Cleanup when verified working:** remove the temp debug logs (`DBG mic peak amplitude` in `AudioCapture`; `DBG wake score peak` in `OpenWakeWordDetector`).
+
+**Still open:** S7 — revoke the pasted GitHub PAT. Docs (this log + Word spec/TOGAF) to be pushed to GitHub on the next push.
+
+### 2026-07-27 -> 28 — Session 9: Work-VM run outcome + new Nova requirements (memory, location, search, worldview, personalization, personality)
+**Work-VM / Drive-backup training attempt — no model recovered.**
+- User set up a separate Colab ("Training Nova", in his personal Google Drive -> Colab Notebooks) and ran the 25k build via the Claude-in-Chrome extension on a work machine, instructing it to copy the finished `nova.onnx` to Google Drive as a safety net.
+- Checked the user's Drive directly (Google Drive connector): global title search for nova/onnx/claudette, the Colab Notebooks folder, and most-recent files — **no `.onnx` landed in Drive.** The notebook's last save froze ~22:16 on 07-27; the Drive-copy step did not stick (likely the Drive mount/auth never completed, or the runtime dropped before the copy). User also thinks he "borked" the session trying to reconnect.
+- **Status:** treat as another non-result; if the model finished it was on the Colab runtime, which has almost certainly been idle-recycled since. **Plan:** re-run clean in the morning with Claude — single tab — and this time **download `nova.onnx` directly the instant it exists** (do NOT rely on a post-hoc Drive-copy). Lesson reinforced across all attempts: the only reliable capture is a direct download at the moment of creation.
+
+**New product requirements (captured as decisions D12-D17; new security items S10-S12). Blocked on the wake word for the full APK loop, but the persona is implemented now.**
+- **D12 — Persistent memory.** Nova remembers across sessions, not just recent turns (extends D9). Design: on-device, encrypted memory store (durable facts + preferences + a rolling conversation summary) injected into context; user can view/clear. -> **S11 (new):** memory / personal-profile store must be encrypted at rest (Keystore-backed) and user-wipeable; sensitive if the device is compromised.
+- **D13 — Location awareness.** APK uses Android location services so Nova knows where John is (fused location, on-demand rather than constant tracking; ACCESS_COARSE/FINE_LOCATION). Feeds context (near-me, weather, travel). -> **S10 (new):** location is sensitive PII — keep on-device, use minimally/as-needed, never persist or transmit beyond the immediate query, user can disable.
+- **D14 — Web search.** Nova can search the internet to enrich conversations and stay current. Design: Claude tool-use with a search tool backed by a search API (Brave / Bing / SerpAPI / Google Programmable Search — pick during build). -> **S12 (new):** adds back an API credential (store encrypted per S1) and egresses queries to the search provider; disclose in-app.
+- **D15 — Worldview / no partisan slant.** John is a God-fearing Christian conservative; Nova respects his faith and values, never talks down to or argues against them, carries **no partisan agenda**, and does not push political opinions. Implemented as *fair, honest, and respectful* — she gives the straight picture rather than swapping one bias for another (a companion that only flatters serves the user worse). Encoded in `Persona.kt`.
+- **D16 — Personalization / learn about John.** Nova actively learns John professionally and personally over time (ties to D12) and uses it to tailor guidance and insight. Builds an on-device personal profile (see S11).
+- **D17 — Personality: humor + tasteful playful charm.** Warm, witty, genuinely funny, with an occasional light, tasteful flirtatious spark — never crude, explicit, or overdone; helpful first. Encoded in `Persona.kt`.
+
+**Implemented this session:**
+- Rewrote `Persona.kt` (the system-prompt "soul") to encode D15, D16, D17 and to make Nova aware of her D12/D13/D14 capabilities, so her voice/character are right from day one. Everything lives in one tunable string; the humor/flirt and worldview lines are plain English the user can dial to taste.
+
+**Deferred (Phase 2b/3, and/or once the wake word lands) — deliberately not rushed:**
+- Build the memory + personal-profile store (D12/D16, S11), the location provider + context injection (D13, S10), and the web-search tool (D14, S12) as real modules during the build.
+- Still outstanding: land a working `nova.onnx`; revoke the GitHub PAT (S7); sync the Word spec/TOGAF to the Nova rename + these requirements.
+
+**User note:** more requirements to come as he thinks of them.
+
+### 2026-07-28 — Session 9 addendum: off-device backup + restore of Nova's memory (D18)
+- User wants Nova's **personal profile (D16) and conversation history (D12)** backed up off-device so they survive a device replacement — proposing GitHub as the store and a periodic (weekly) backup job.
+- **D18 — Off-device backup & restore.** Nova periodically backs up her memory (profile + history) to a user-controlled remote and can restore it onto a new device.
+  - **Encrypt client-side, always (non-negotiable).** This is the most sensitive data in the app — everything Nova knows about John, plus every conversation. Encrypt on-device with a passphrase-derived key John controls BEFORE it leaves, so the remote only ever holds ciphertext and a repo leak / token compromise is harmless. -> **S13 (new):** off-device memory backup — mandatory client-side encryption; private store only; guard the write credential.
+  - **Store choice.** GitHub is viable and fits the single-source-of-truth instinct, with a real bonus: the profile gets version history (watch it evolve / roll back). Caveats: (a) it needs a write token on the phone — use a fine-grained PAT scoped to a **separate private backup repo only**, stored encrypted (per S1/S7), entered in Settings, never hardcoded; (b) keep transcripts compact or git history bloats. **Alternative lean: Google Drive** is arguably cleaner for a data blob (OAuth instead of a stored write-all token; no repo bloat) since John already lives in Google. Decision deferred to build; either works *with* client-side encryption.
+  - **What to back up:** profile + rolling memory summary (small, versioned) always; full transcripts as an encrypted archive (GitHub or Drive), optional/capped to control size.
+  - **Cadence:** weekly is fine for the slow-changing profile; **nightly (or on-meaningful-change)** for conversation history so a dead device costs at most a day, not a week. Android **WorkManager** for the periodic job (reboot-safe, battery-aware) + a manual "back up now" button in Settings.
+  - **Restore is first-class:** new device -> enter passphrase -> pull latest -> decrypt -> Nova remembers John. The backup is only as good as the restore.
+- Deferred to the build (with the D12/D16 memory modules); not rushed.

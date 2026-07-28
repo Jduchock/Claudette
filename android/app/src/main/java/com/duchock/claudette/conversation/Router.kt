@@ -5,12 +5,12 @@ package com.duchock.claudette.conversation
  * Sonnet handles everyday requests; Opus is used when the request looks analytical,
  * multi-step, or long.
  *
- * TODO(config): set these to the CURRENT Anthropic model IDs before shipping -- these are
- * placeholders. They can also be surfaced in Settings if you want to change them without a rebuild.
+ * Model IDs are current as of 2026-07 (verified against platform.claude.com). They are
+ * pinned snapshots; bump them here if Anthropic ships newer generations.
  */
 object Router {
-    const val SONNET = "claude-sonnet-4-5"   // TODO: confirm exact current model id
-    const val OPUS   = "claude-opus-4-1"     // TODO: confirm exact current model id
+    const val SONNET = "claude-sonnet-5"   // fast, everyday
+    const val OPUS   = "claude-opus-4-8"   // heavy reasoning / complex asks
 
     private val COMPLEX_HINTS = listOf(
         "analyze", "analyse", "explain why", "compare", "difference between", "plan",

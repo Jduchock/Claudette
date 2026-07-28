@@ -1,7 +1,18 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+// Secrets are read from local.properties (git-ignored, never committed) and baked into
+// BuildConfig at build time — so you set keys once in Android Studio, not on the phone.
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) FileInputStream(f).use { load(it) }
+}
+fun secret(key: String): String = (localProps.getProperty(key) ?: "").replace("\"", "")
 
 android {
     namespace = "com.duchock.claudette"
@@ -14,6 +25,11 @@ android {
         versionCode = 1
         versionName = "0.2"
         vectorDrawables { useSupportLibrary = true }
+
+        // Baked from local.properties at build time (blank if not set there).
+        buildConfigField("String", "ANTHROPIC_API_KEY", "\"${secret("ANTHROPIC_API_KEY")}\"")
+        buildConfigField("String", "ELEVENLABS_API_KEY", "\"${secret("ELEVENLABS_API_KEY")}\"")
+        buildConfigField("String", "ELEVENLABS_VOICE_ID", "\"${secret("ELEVENLABS_VOICE_ID")}\"")
     }
 
     buildTypes {
@@ -32,7 +48,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
 
     packaging {

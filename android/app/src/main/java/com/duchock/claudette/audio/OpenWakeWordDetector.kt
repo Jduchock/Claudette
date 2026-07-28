@@ -48,6 +48,7 @@ class OpenWakeWordDetector(
     private val melBuffer = ArrayDeque<FloatArray>()       // rows of 32 mels
     private val featureBuffer = ArrayDeque<FloatArray>()   // rows of 96-dim embeddings
     private var cooldown = 0                               // frames to suppress repeat fires
+    private var peakDbg = 0f                               // DEBUG: running max wake score
 
     override fun initialize(): Boolean {
         if (!assetExists("models/$MEL") || !assetExists("models/$EMB") || !assetExists("models/$WW")) {
@@ -95,6 +96,7 @@ class OpenWakeWordDetector(
 
             if (featureBuffer.size >= WW_WINDOW) {
                 val score = runWakeWord()
+                if (score > peakDbg) { peakDbg = score; Log.i(TAG, "DBG wake score peak=%.4f".format(score)) }
                 if (score >= threshold && cooldown == 0) {
                     cooldown = COOLDOWN_FRAMES
                     return WakeResult(true, score, "claudette")
