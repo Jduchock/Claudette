@@ -204,3 +204,62 @@ Threats are logged here as they are identified during construction. Severity: �
   - **Cadence:** weekly is fine for the slow-changing profile; **nightly (or on-meaningful-change)** for conversation history so a dead device costs at most a day, not a week. Android **WorkManager** for the periodic job (reboot-safe, battery-aware) + a manual "back up now" button in Settings.
   - **Restore is first-class:** new device -> enter passphrase -> pull latest -> decrypt -> Nova remembers John. The backup is only as good as the restore.
 - Deferred to the build (with the D12/D16 memory modules); not rushed.
+
+### 2026-07-28 — Session 9 note: future full "claudette" -> "nova" rename (D19, deferred)
+- User wants, eventually (explicitly NOT tonight), to replace **all** remaining "claudette" with "nova" across the project.
+- **D19 — Full rename to Nova (deferred).** This is a real refactor, not a blind find-replace. Handle with care:
+  - **Package + namespace:** `com.duchock.claudette` -> `com.duchock.nova` — every package/import line, the `java/com/duchock/claudette/` directory tree, `applicationId`/`namespace` in build.gradle, and AndroidManifest. Use Android Studio's Rename refactor, not text search-replace.
+  - **Class names:** `ClaudetteApp` -> `NovaApp`, etc.
+  - **Model filename:** `assets/models/claudette.onnx` AND the `WW` constant in `OpenWakeWordDetector.kt` must change together (both currently "claudette.onnx").
+  - **Stored data:** any SharedPreferences file names / keys containing "claudette" -> rename WITH a migration, or the user's saved API keys/voice/settings get orphaned on update.
+  - **Repo + docs:** repo (github Jduchock/Claudette), workspace folder `C:\a_claudette`, doc filenames (`Claudette_Spec.docx`, `CLAUDETTE_LOG.md`) — optional, but part of "all".
+  - **Best sequencing:** do it AFTER the wake word works (don't rename a moving target), via the IDE refactor + a clean rebuild/test to catch breakage, as its own isolated commit (easy to review/revert).
+
+
+### 2026-07-30 - Session 10: shoe-inventory demo (Option 2 - on-device tool-use)
+- **Purpose:** Nova is a proof-of-concept to pitch leadership for funding a full project. This build makes her a hands-free **store-associate helper** for a live exec demo. If leadership bites, a separate project spins up for the real backend.
+- **Data:** `docs/Shoe_Inventory_Simulation_4_Stores_1.xlsx` - SYNTHETIC footwear inventory, 4 stores, ~524 size-level SKUs. Not real retailer data; no confidential info. Home store **0146 Trussville Marketplace** (Hibbett); nearby = 1382 Cartersville, 2071 Southaven (City Gear, deepest), 3719 Florence.
+- **Approach = Option 2 (chosen deliberately):** Nova queries an on-device copy of the data via real Anthropic **tool-use**. Not scalable, and that's fine - the goal is to show the *end-user experience*, not the plumbing. Counts/locations are computed **deterministically in Kotlin** (never model arithmetic), so her numbers are always right in front of the suits.
+- **Backend (deferred, NOT built tonight):** production source will be an API *or* an MCP server fronting it (undecided), over millions of rows (thousands of shoes x thousands of stores). Plan we aligned on: fast indexed point-lookups stay live; expensive chainwide rollups get **pre-aggregated/cached** behind the layer. Demo tool contract (check_stock / store_rollup / pricing_lookup) is intentionally shaped to survive that swap - demo is the contract, not throwaway.
+- **Trigger:** demo mode turns on when Nova hears **"are you ready for a demonstration"** (and off on "end the demonstration"). Process-level flag (a new ConversationManager is built each wake, so state must outlive one conversation).
+- **Behavior spec (John's, verbatim intent):** at 0146 = tell them how many + exact back-room shelf location (zone/bay/shelf/bin + reach). Not at 0146 but nearby = name the store + count and **offer to hold**. Nobody = say so + closest alternative.
+
+**Implemented this session (new demo/ package + wiring):**
+- `assets/inventory_demo.json` (~363 KB) - compact export of the spreadsheet: 4 stores, 524 items with per-store on-hand (null = not carried, 0 = OOS) + 0146 backroom locations folded in.
+- `demo/InventoryRepo.kt` - loads the JSON once at service start (off main thread), deterministic query methods (stock/rollup/pricing, fuzzy model-name matching, exact size).
+- `demo/InventoryTools.kt` - 3 Anthropic tool schemas + executor returning compact JSON.
+- `demo/DemoMode.kt` - trigger/exit detection + demo system-prompt addendum (home 0146, others nearby, shelf-vs-hold rules).
+- `net/ClaudeClient.kt` - added respondWithTools(): full tool_use/tool_result loop (max 4 rounds, then drops tools to force a text reply). Original respond() untouched.
+- `conversation/ConversationManager.kt` - routes the turn through tools when demo mode is active; forces **Sonnet** in demo for snappy round-trips.
+- `service/WakeWordService.kt` - warms the inventory dataset at startup.
+- No new Android permissions; no secrets touched.
+
+**Verified:** re-ran all 3 tools' filter logic in Python against the shipped JSON - all four demo query types return correct answers (in-stock+location, not-here+nearby-hold, brand rollup, clearance pricing). Kotlin compile must happen in Android Studio (no Android SDK in the cloud session).
+
+**Ops note:** device bridge dropped mid-session during the ClaudeClient.kt write; verified afterward the file was untouched (clean original) and re-wrote it. No work lost.
+
+**Still open:** build+run in Android Studio to confirm compile; git add -A / commit / push (mel fix + always-listen from S9 are still uncommitted too); revoke GitHub PAT (S7); D19 rename still deferred; D12-D18 real modules still deferred.
+
+
+### 2026-07-30 - Session 11: persistent memory (D12/D16) + inventory lookup hardening
+**Two asks: (1) make Nova remember across sessions; (2) fix brittle inventory lookup (SKU/UPC/Item ID + fuzzy descriptions, no false out-of-stock).**
+
+**Persistent memory (D12/D16) - built, encrypted from line one (S13):**
+- Root cause she forgot: conversation history was RAM-only (12-turn buffer, wiped on 5-min idle / app restart). Nothing was persisted.
+- New `memory/` package:
+  - `MemoryStore.kt` - EncryptedSharedPreferences (Android Keystore, same scheme as SecretStore) holding two small text fields: `profile` (durable facts) + `summary` (rolling narrative). `memoryBlock()` injects them into Nova's system prompt on the normal (non-demo) path.
+  - `MemoryUpdater.kt` - "reflection": after each conversation a cheap Sonnet call distills the new turns, MERGES into profile, refreshes summary, saves. Skipped in demo mode so store Q&A never pollutes John's personal memory. Never stores secrets.
+- Wiring: `ConversationManager` injects memory + adds `reflect()`; `WakeWordService` loads memory at startup and fires `reflect()` in the background after each convo (does NOT delay re-listen).
+- **Space:** text only - a few KB for the profile/summary; even years of chat = low tens of MB. Non-issue. (Audio is never stored.)
+- **Limits (told John):** the real constraint is the context window, not disk -> that's why we distill instead of replaying transcripts; distillation can lose nuance (raw source stays authoritative if we add a transcript log later); memory must revise, not just accumulate; privacy is the big one -> encrypted at rest, and any off-device backup (D18) must be client-side encrypted first.
+- Next possible step: add a transcript log (SQLite/Room) under the profile layer + an explicit "Nova, remember that..." command. Deferred.
+
+**Inventory lookup hardening (demo robustness):**
+- Regenerated `inventory_demo.json` to ADD `upc` + `itemId` per item (SKU was already there). 524 items.
+- `InventoryRepo` rewritten: exact lookup by SKU / UPC / Item ID (identifier param or embedded in the query), plus token-based fuzzy matching over brand+model+description+color that is word-order independent, stopword-stripped, and grey/gray-normalized. Color is folded into the tokens so partial/oddly-phrased colorways match.
+- `InventoryTools.check_stock` now returns a pre-computed `summary` (homeInStockSizes, homeUnits, nearbyAvailability, anyInStock) so Nova reads the answer instead of eyeballing rows.
+- `DemoMode` addendum: never declare out-of-stock unless anyInStock is false; loosen a failed search before giving up; may search by ID or loose description.
+- **Bug it fixes:** John looked up SKU HB-4101174 ("Nike Kobe 5 Protro White/Varsity Purple"). It is stocked 5-deep at 0146 (and all 4 stores) - her "nothing in stock" was a pure narration misread, and "purple" vs "varsity purple" failed on substring color matching. Verified in Python against the shipped JSON: SKU/UPC/Item ID lookups, "white and purple", bare "purple", and grey->gray all now match, and the summary always reports homeUnits=5 / anyInStock=true.
+
+**Build:** needs a fresh Gradle sync (new `memory/` package + new demo fields). No new dependencies (security-crypto already present). Kotlin compile must happen in Android Studio.
+**Still open:** build+run to confirm compile; commit/push (S9 + S10 + S11 all uncommitted); revoke GitHub PAT (S7); D19 rename deferred; D13/D14 (location, web search) + D18 backup still deferred.

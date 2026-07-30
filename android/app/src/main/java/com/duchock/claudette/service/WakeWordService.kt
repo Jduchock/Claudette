@@ -63,6 +63,12 @@ class WakeWordService : LifecycleService() {
         DebugStatus.event(if (loaded) "Wake model loaded" else "Wake model MISSING")
         stt = AndroidSpeechToText(applicationContext)
         tts = TtsPlayer(applicationContext)
+        // Load Nova's persistent memory (encrypted) so she remembers John from the first turn.
+        com.duchock.claudette.memory.MemoryStore.ensureLoaded(applicationContext)
+        // Warm the demo inventory dataset off the main thread so it's ready by demo time.
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            com.duchock.claudette.demo.InventoryRepo.ensureLoaded(applicationContext)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -163,7 +169,10 @@ class WakeWordService : LifecycleService() {
                 Log.e(TAG, "Conversation loop error", e)
                 DebugStatus.event("Error: ${e.message ?: e.javaClass.simpleName}")
             } finally {
+                val convo = conversation
                 endConversation()
+                // Distill this conversation into long-term memory in the background (no-op in demo mode).
+                lifecycleScope.launch { runCatching { convo.reflect() } }
             }
         }
     }

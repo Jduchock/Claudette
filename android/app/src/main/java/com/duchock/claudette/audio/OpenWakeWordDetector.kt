@@ -130,7 +130,7 @@ class OpenWakeWordDetector(
         OnnxTensor.createTensor(e, FloatBuffer.wrap(audio), longArrayOf(1, rawFilled.toLong())).use { input ->
             melSession!!.run(Collections.singletonMap(melInputName, input)).use { res ->
                 val t = res[0] as OnnxTensor
-                val frames = t.info.shape[0].toInt()     // [T,1,1,32]
+                val frames = (t.info.shape.fold(1L) { a, d -> a * d } / N_MELS).toInt()  // frames = total mel elements / 32 mels-per-frame (output is [1,1,T,32]; shape[0] was the batch dim, not T)
                 val fb = t.floatBuffer
                 val out = Array(frames) { FloatArray(N_MELS) }
                 var i = 0

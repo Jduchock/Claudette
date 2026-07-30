@@ -30,8 +30,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,8 +39,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import com.duchock.claudette.service.WakeWordService
 import com.duchock.claudette.ui.SettingsActivity
 import com.duchock.claudette.util.DebugStatus
@@ -76,28 +72,6 @@ class MainActivity : ComponentActivity() {
             if (result[Manifest.permission.RECORD_AUDIO] == true) {
                 startListening(); listening = true
             } else listening = false
-        }
-
-        // On first entry, if we don't have the mic permission yet, ask for it. The launcher
-        // callback starts listening the moment the user grants it.
-        LaunchedEffect(Unit) {
-            if (!hasAudioPermission()) launcher.launch(permissions)
-        }
-
-        // Auto-start listening every time the app comes to the foreground (ON_RESUME), as long
-        // as the mic permission is granted -- so Nova is live the instant you open the app, no
-        // tap required. Doing this on ON_RESUME (rather than during first composition) guarantees
-        // the activity is actually in the foreground, which is what lets Android start the
-        // microphone foreground service reliably. The service is idempotent, so calling this when
-        // it is already running is a harmless no-op.
-        DisposableEffect(Unit) {
-            val observer = LifecycleEventObserver { _, event ->
-                if (event == Lifecycle.Event.ON_RESUME && hasAudioPermission()) {
-                    startListening(); listening = true
-                }
-            }
-            lifecycle.addObserver(observer)
-            onDispose { lifecycle.removeObserver(observer) }
         }
 
         Column(
@@ -139,8 +113,8 @@ class MainActivity : ComponentActivity() {
 
             Spacer(Modifier.height(24.dp))
             Text(
-                "Nova is listening in the background whenever the app has run once. Set your " +
-                    "Anthropic and ElevenLabs keys and a voice ID in Settings, then just say \"Nova\".",
+                "Set your Anthropic + ElevenLabs keys and a voice ID in Settings. Until the " +
+                    "openWakeWord model is added, use \"Test wake\" to start a conversation.",
                 style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center
             )
         }
