@@ -48,6 +48,9 @@ class SettingsActivity : ComponentActivity() {
             mutableStateOf(SecretStore.get(this, SecretStore.KEY_ELEVENLABS) ?: "")
         }
         var voice by remember { mutableStateOf(Prefs.voiceId(this)) }
+        var maps by remember {
+            mutableStateOf(SecretStore.get(this, SecretStore.KEY_GOOGLE_MAPS) ?: "")
+        }
         var saved by remember { mutableStateOf(false) }
 
         Column(
@@ -80,11 +83,18 @@ class SettingsActivity : ComponentActivity() {
                 label = { Text("ElevenLabs voice ID") },
                 singleLine = true, modifier = Modifier.fillMaxWidth()
             )
+            OutlinedTextField(
+                value = maps, onValueChange = { maps = it; saved = false },
+                label = { Text("Google Maps API key (optional — nearby places)") },
+                visualTransformation = PasswordVisualTransformation(),
+                singleLine = true, modifier = Modifier.fillMaxWidth()
+            )
             Button(
                 onClick = {
                     SecretStore.put(this@SettingsActivity, SecretStore.KEY_ANTHROPIC, anthropic.trim())
                     SecretStore.put(this@SettingsActivity, SecretStore.KEY_ELEVENLABS, eleven.trim())
                     Prefs.setVoiceId(this@SettingsActivity, voice.trim())
+                    SecretStore.put(this@SettingsActivity, SecretStore.KEY_GOOGLE_MAPS, maps.trim())
                     saved = true
                 },
                 modifier = Modifier.fillMaxWidth()

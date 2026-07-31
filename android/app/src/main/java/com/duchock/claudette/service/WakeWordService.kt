@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.PowerManager
+import android.util.Base64
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -18,6 +19,11 @@ import com.duchock.claudette.audio.AudioCapture
 import com.duchock.claudette.audio.OpenWakeWordDetector
 import com.duchock.claudette.audio.WakeWordDetector
 import com.duchock.claudette.conversation.ConversationManager
+import com.duchock.claudette.bible.BibleBookmark
+import com.duchock.claudette.bible.BibleControl
+import com.duchock.claudette.bible.BibleNotes
+import com.duchock.claudette.bible.BibleRepo
+import com.duchock.claudette.bible.BibleTools
 import com.duchock.claudette.conversation.Dismiss
 import com.duchock.claudette.net.ClaudeClient
 import com.duchock.claudette.net.ElevenLabsClient
@@ -30,6 +36,7 @@ import com.duchock.claudette.util.Secrets
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
+import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -54,6 +61,9 @@ class WakeWordService : LifecycleService() {
 
     private val inConversation = AtomicBoolean(false)
     private var conversationJob: Job? = null
+    @Volatile private var currentConversation: ConversationManager? = null
+    @Volatile private var reading = false
+    private var readingJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -65,9 +75,16 @@ class WakeWordService : LifecycleService() {
         tts = TtsPlayer(applicationContext)
         // Load Nova's persistent memory (encrypted) so she remembers John from the first turn.
         com.duchock.claudette.memory.MemoryStore.ensureLoaded(applicationContext)
-        // Warm the demo inventory dataset off the main thread so it's ready by demo time.
+        // On-demand location + nearby-places (D13); init with the shared HTTP client.
+        com.duchock.claudette.location.LocationProvider.init(applicationContext)
+        com.duchock.claudette.net.PlacesRepo.init(applicationContext, http)
+        // Bible companion (D23): init note store + tools now; load the KJV off the main thread.
+        BibleNotes.init(applicationContext)
+        BibleTools.init(applicationContext)
+        // Warm the demo inventory dataset and the King James Version off the main thread.
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Default) {
             com.duchock.claudette.demo.InventoryRepo.ensureLoaded(applicationContext)
+            BibleRepo.ensureLoaded(applicationContext)
         }
     }
 
@@ -76,6 +93,9 @@ class WakeWordService : LifecycleService() {
         when (intent?.action) {
             ACTION_STOP -> { stopListening(); stopSelf(); return START_NOT_STICKY }
             ACTION_TEST_WAKE -> onWakeDetected()
+            ACTION_ANALYZE_IMAGE -> analyzeImage(intent.getStringExtra(EXTRA_IMAGE_PATH))
+            ACTION_START_READING -> startReading(resolveRef(intent.getStringExtra(EXTRA_REF)))
+            ACTION_STOP_READING -> stopReading()
             else -> startListening()
         }
         return START_STICKY
@@ -117,6 +137,7 @@ class WakeWordService : LifecycleService() {
         if (!inConversation.compareAndSet(false, true)) return
         Log.i(TAG, "Wake word 'Nova' detected")
         DebugStatus.event("Wake detected (%.2f)".format(DebugStatus.lastWakeScore))
+        if (reading) stopReading()
         stopCapture() // free the mic for SpeechRecognizer
 
         val anthropicKey = Secrets.anthropicKey(this)
@@ -132,10 +153,11 @@ class WakeWordService : LifecycleService() {
 
         val claude = ClaudeClient(anthropicKey, http)
         val eleven = ElevenLabsClient(elevenKey, http)
-        val conversation = ConversationManager(claude)
+        val conversation = currentConversation ?: ConversationManager(claude).also { currentConversation = it }
 
         updateNotification(CONVERSING_TEXT)
         conversationJob = lifecycleScope.launch {
+            var startReadingAt: BibleRepo.Ref? = null
             try {
                 var emptyStreak = 0
                 while (inConversation.get()) {
@@ -152,6 +174,8 @@ class WakeWordService : LifecycleService() {
                         eleven.synthesize("Okay. I'm here when you need me.", voiceId)?.let { tts.play(it) }
                         break
                     }
+                    val readAt = BibleControl.readingStart(utterance, this@WakeWordService)
+                    if (readAt != null) { startReadingAt = readAt; break }
                     DebugStatus.event("Thinking…")
                     val reply = conversation.handle(utterance)
                     if (reply == null) {
@@ -174,6 +198,7 @@ class WakeWordService : LifecycleService() {
                 // Distill this conversation into long-term memory in the background (no-op in demo mode).
                 lifecycleScope.launch { runCatching { convo.reflect() } }
             }
+            startReadingAt?.let { startReading(it) }
         }
     }
 
@@ -184,6 +209,87 @@ class WakeWordService : LifecycleService() {
             updateNotification(LISTENING_TEXT)
             startCapture()
         }
+    }
+
+    /** John fed Nova a photo from the UI: analyze it, fold it into the conversation, speak her read. */
+    private fun analyzeImage(path: String?) {
+        if (path.isNullOrBlank()) return
+        val anthropicKey = Secrets.anthropicKey(this)
+        val elevenKey = Secrets.elevenLabsKey(this)
+        val voiceId = Secrets.voiceId(this)
+        if (anthropicKey.isBlank()) { DebugStatus.event("Missing Anthropic key — check Settings"); return }
+        val convo = currentConversation
+            ?: ConversationManager(ClaudeClient(anthropicKey, http)).also { currentConversation = it }
+        val eleven = if (elevenKey.isNotBlank()) ElevenLabsClient(elevenKey, http) else null
+        lifecycleScope.launch {
+            try {
+                val bytes = File(path).readBytes()
+                val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                DebugStatus.event("Looking at your photo…")
+                val reply = convo.handleImage(b64, "image/jpeg")
+                if (reply.isNullOrBlank()) { DebugStatus.event("Couldn't read that image"); return@launch }
+                DebugStatus.event("Nova: ${reply.take(80)}")
+                if (eleven != null && voiceId.isNotBlank()) {
+                    eleven.synthesize(reply, voiceId)?.let { tts.play(it) }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "analyzeImage failed", e); DebugStatus.event("Image error: ${e.message}")
+            }
+        }
+    }
+
+    /** Read Scripture aloud from [start], saving the bookmark as it goes (D23). Capture stays on so "Nova" can interrupt. */
+    private fun startReading(start: BibleRepo.Ref) {
+        val elevenKey = Secrets.elevenLabsKey(this)
+        val voiceId = Secrets.voiceId(this)
+        if (elevenKey.isBlank() || voiceId.isBlank()) { DebugStatus.event("Missing ElevenLabs key/voice"); return }
+        if (!BibleRepo.isLoaded()) { DebugStatus.event("Scripture still loading — try again in a moment"); return }
+        readingJob?.cancel()
+        reading = true
+        BibleTools.readingNow = true
+        val eleven = ElevenLabsClient(elevenKey, http)
+        updateNotification("Reading — ${BibleRepo.label(start)}")
+        readingJob = lifecycleScope.launch {
+            try {
+                var ref: BibleRepo.Ref? = start
+                while (reading && ref != null) {
+                    BibleBookmark.set(this@WakeWordService, ref)
+                    val text = BibleRepo.verse(ref) ?: break
+                    val spoken = if (ref.verse == 1)
+                        "${BibleRepo.bookName(ref.book)}, chapter ${ref.chapter}. $text" else text
+                    DebugStatus.event("Reading ${BibleRepo.label(ref)}")
+                    val audio = eleven.synthesize(spoken, voiceId) ?: break
+                    tts.play(audio)
+                    ref = BibleRepo.next(ref)
+                }
+                if (reading && ref == null) {
+                    eleven.synthesize("And that is the end of the Scriptures. Amen.", voiceId)?.let { tts.play(it) }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // stopped by John; the bookmark is already saved at the current verse
+            } catch (e: Exception) {
+                Log.e(TAG, "reading error", e)
+            } finally {
+                reading = false
+                BibleTools.readingNow = false
+                if (Prefs.isListeningEnabled(this@WakeWordService)) updateNotification(LISTENING_TEXT)
+            }
+        }
+    }
+
+    private fun resolveRef(s: String?): BibleRepo.Ref =
+        if (s.isNullOrBlank() || s == "continue") BibleBookmark.get(this)
+        else BibleRepo.parse(s) ?: BibleBookmark.get(this)
+
+    /** Halt reading (STOP button or wake). Bookmark is already saved at the current verse. */
+    private fun stopReading() {
+        if (!reading && readingJob == null) return
+        reading = false
+        BibleTools.readingNow = false
+        readingJob?.cancel()
+        readingJob = null
+        DebugStatus.event("Stopped reading")
+        if (Prefs.isListeningEnabled(this)) updateNotification(LISTENING_TEXT)
     }
 
     // ---- notification ----
@@ -244,5 +350,10 @@ class WakeWordService : LifecycleService() {
         private const val CONVERSING_TEXT = "Listening to you..."
         const val ACTION_STOP = "com.duchock.claudette.STOP"
         const val ACTION_TEST_WAKE = "com.duchock.claudette.TEST_WAKE"
+        const val ACTION_ANALYZE_IMAGE = "com.duchock.claudette.ANALYZE_IMAGE"
+        const val EXTRA_IMAGE_PATH = "image_path"
+        const val ACTION_START_READING = "com.duchock.claudette.START_READING"
+        const val ACTION_STOP_READING = "com.duchock.claudette.STOP_READING"
+        const val EXTRA_REF = "bible_ref"
     }
 }

@@ -263,3 +263,60 @@ Threats are logged here as they are identified during construction. Severity: �
 
 **Build:** needs a fresh Gradle sync (new `memory/` package + new demo fields). No new dependencies (security-crypto already present). Kotlin compile must happen in Android Studio.
 **Still open:** build+run to confirm compile; commit/push (S9 + S10 + S11 all uncommitted); revoke GitHub PAT (S7); D19 rename deferred; D13/D14 (location, web search) + D18 backup still deferred.
+
+
+### 2026-07-31 - Session 12: location awareness + nearby places (D13)
+**Nova now knows where she is and can answer "what's around me." Scope chosen: location awareness + nearby places; updates: on-demand (not continuous).**
+
+- **Free layer (no key):** fused location (Google Play Services) fetches a FRESH fix only when a question needs it, reverse-geocoded (Android Geocoder) to address/city/area. Covers "where am I", "what city", near-me context.
+- **Places layer (uses the Google Maps key):** Google Places API (New) Text Search, biased to current location, returns nearby places with name/address/distance/rating/openNow, nearest first. This is what needs the key + billing.
+- **New files:** `location/LocationProvider.kt` (on-demand fix + geocode), `location/LocationTools.kt` (get_location + nearby_places tool schemas/executor), `net/PlacesRepo.kt` (Places New Text Search + haversine distance).
+- **Foundation:** added `com.google.android.gms:play-services-location:21.3.0`; `GOOGLE_MAPS_API_KEY` BuildConfig from local.properties; manifest permissions ACCESS_FINE/COARSE/BACKGROUND_LOCATION; `Secrets.googleMapsKey` + `SecretStore.KEY_GOOGLE_MAPS`; a Google Maps key field in Settings.
+- **Wiring:** `ClaudeClient.respondWithTools` exec is now `suspend` (location calls are async); the NORMAL (non-demo) conversation path now attaches the location tools (memory still injected); `WakeWordService` inits LocationProvider + PlacesRepo at startup; `MainActivity` requests fine/coarse location with the mic prompt, then a best-effort background ("Allow all the time") follow-up; Persona updated to use the real tools.
+- **Privacy (S10):** on-demand only, no continuous tracking, nothing persisted, reverse-geocode is local. Background-location permission lets her answer while running in the background; the foreground-service type stays `microphone` only (kept location OFF the FGS type so a missing location grant can never crash the always-on mic service).
+- **Setup the user needs (told them):** key goes in local.properties as GOOGLE_MAPS_API_KEY (done); Google Cloud must have **Places API (New) enabled** + **billing on** or nearby_places errors (get_location still works free).
+- **Build:** needs a Gradle sync (new dependency + new packages). Kotlin compile in Android Studio.
+- **Still open:** build+test location; D14 web search is the next capability; commit/push (S9-S12 all uncommitted); D18 backup + D19 rename still deferred; revoke PAT (S7).
+
+
+### 2026-07-31 - Session 12 note: Teams / Outlook (M365) integration - PARKED (D20)
+- User asked to give Nova access to Microsoft Teams + Outlook. Flagged before building: (a) use OAuth ONLY, never raw M365 credentials (ROPC is deprecated, breaks with MFA, exposes the password; will not handle raw passwords); (b) wiring a WORK tenant in is the personal/work mix his employer discourages and would need admin consent (usually blocked on corporate tenants).
+- **D20 - M365 (Teams/Outlook) integration: PARKED pending employer approval.** User agreed to get approvals first (good call). When revisited: Microsoft Graph via MSAL (OAuth auth-code flow) + an Entra app registration, least-privilege Graph scopes, tokens only (never passwords), and any send/post gated behind explicit confirmation.
+- **S15 (new, latent):** an M365 integration would route work communications through a personal app and a personal Anthropic key - do not build until approved by employer/IT; OAuth + admin consent + revocable tokens only.
+- Not built. D13 location still pending build/test on the user's side; S9-S12 work still uncommitted.
+
+
+### 2026-07-31 - Session 12 note: bank / expense access - PARKED (D21)
+- User wants Nova to answer questions about checking-account expenses (read-only; she never moves money). Laid out two paths: (A) live link via an aggregator (Plaid/Teller) - needs a backend to hold the aggregator secret (can't ship in the APK, S1) plus an account/approval/cost; (B) export-based on-device - user drops CSV/OFX exports, Nova queries them locally like the inventory demo. Private, no backend, not live.
+- User is not keen on a brokerage/aggregator; asked whether banks offer personal-account API keys. Reality: US retail banks generally do NOT expose consumer API keys to individuals - open banking runs through aggregators or emerging FDX standards - so Option B is the clean personal route.
+- **D21 - Bank/expense access: PARKED.** If revisited, default to Option B (export-based, on-device, encrypted at rest, strictly read-only, no money movement ever). -> **S16 (new, latent):** financial data is the most sensitive category yet - read-only, encrypt at rest, and note that relevant transactions egress to the Anthropic API at query time.
+
+
+### 2026-07-31 - Session 12: "Give Nova a Picture" - feed-a-photo vision (D22)
+- Chose stills over live camera (battery, privacy, and Android's background-camera limits). Video dropped - frame-sampling a clip is too resource-heavy for the payoff.
+- **Flow:** MainActivity "Give Nova a Picture" -> system camera (ActivityResultContracts.TakePicture + FileProvider, no CAMERA permission needed) -> review screen with **Confirm / Retake / Cancel** -> on Confirm the image is saved to app-internal nova_media/ (ImageStore, staged for the future D18 check-in upload) AND handed to the service for analysis.
+- **Vision path:** `ClaudeClient.respondWithImage` (base64 image content block); `ConversationManager.handleImage` analyzes once (Sonnet) and folds Nova's description into the SHARED conversation history as text, so follow-up questions keep context without re-sending the image (cost control). `WakeWordService` gains `ACTION_ANALYZE_IMAGE` + a persistent `currentConversation` (reused across wakes and photos) and speaks her read via ElevenLabs; her description also flows into long-term memory on reflection.
+- **New files:** `media/ImageStore.kt`, `res/xml/file_paths.xml`, FileProvider entry in the manifest.
+- **Storage/backup note:** raw images live in sandboxed app-internal storage; the actual off-device upload rides on D18 (not built). Raw media is heavy vs text memory - when D18 lands, decide raw-media-backup vs analysis-only, and client-side encrypt first (S13).
+- **Build:** Gradle sync + rebuild (new files + manifest provider).
+- **Still open:** build/test the picture flow; D18 backup (now also covers images); commit S9-S12 + this; D14 web search; D19 rename; revoke PAT (S7).
+
+
+### 2026-07-31 - Docs refresh + threat-register note
+- Spec -> v0.4 and TOGAF -> v1.2: added Location & Nearby Places (D13) and Vision / "Give Nova a Picture" (D22) sections, refreshed FRs (now FR-1..FR-20), tech stack, permissions, roadmap, and the threat register; noted the parked M365 (D20) and bank/expense (D21) integrations as conscious deferrals.
+- **S14 (assigned): photos John feeds Nova** are stored on-device (sandboxed app-internal storage) and sent to Claude only at analysis time. Mitigation: no gallery write; encrypt before any off-device backup (S13). This fills the S14 slot; full register is now S1-S16 (S15 = M365 latent/parked, S16 = bank/expense latent/parked).
+
+
+### 2026-07-31 - Session 12: KJV Bible reading companion (D23)
+- **KJV is public domain** (Crown-copyright only in the UK), so the whole text is bundled on-device: `assets/bible_kjv.json` — 66 books, 31,102 verses (Genesis–Revelation), translators' bracketed words de-bracketed so TTS reads cleanly. Sourced via the `pythonbible-kjv` package, verified.
+- **New `bible/` package:**
+  - `BibleRepo` — loads the KJV, verse/chapter access, sequential next() (crosses chapters and books, stops at Revelation), and reference parsing ("John 3:16", "Psalm 23", "1 Corinthians 13:4", book-only). Verified in Python.
+  - `BibleBookmark` — persists where John left off (resume next time). Plain prefs (not sensitive).
+  - `BibleNotes` — passage-aware study notes keyed by book:chapter, ENCRYPTED at rest (personal reflection); surfaced when a passage recurs.
+  - `BibleTools` — discussion tools Nova calls: bible_lookup (quote exact KJV), bible_recall_notes, bible_save_note, bible_where. Merged with the location tools on the normal conversation path.
+  - `BibleControl` — detects a spoken "read the bible / continue reading / read <ref>" command in an utterance.
+- **Reading loop (in WakeWordService):** reads verse-by-verse via ElevenLabs, announces book+chapter at each chapter start, and SAVES THE BOOKMARK as it goes so a stop/interrupt never loses the place. Wake capture stays ON during reading so "Nova" interrupts hands-free (KJV never says "Nova", so no self-trigger). Started by voice ("read the bible", "continue reading", "read John 3") or the "Read the Bible" button (ACTION_START_READING); stopped by the STOP button (ACTION_STOP_READING) or by saying "Nova".
+- **STOP-word decision (John asked about training):** v1 uses the **STOP button (instant)** + the **"Nova" wake word as a hands-free interrupt** (pauses reading, opens a chat to say "stop"/"explain that"/"keep going"). Chose this over per-verse spoken-"STOP" detection because that would flap the mic on/off each verse — the exact sloppiness John had me roll back earlier. A dedicated always-listening **"STOP" wake model is the upgrade** (same free Colab as "Nova", with a self-trigger guard); deferred unless John wants instant mid-verse hands-free stop.
+- **UI:** "Read the Bible (continue)" and "STOP reading" buttons added to MainActivity. Persona updated so Nova knows she can read + discuss Scripture and use the bible tools.
+- **Build:** Gradle sync + rebuild (new `bible/` package + ~4.2 MB asset; no new dependencies). Kept the project compilable.
+- **Still open:** build/test; optional trained "STOP" model; D14 web search; D18 backup; D19 rename; commit (S9-S12 + all of tonight uncommitted).

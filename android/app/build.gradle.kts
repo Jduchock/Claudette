@@ -30,6 +30,7 @@ android {
         buildConfigField("String", "ANTHROPIC_API_KEY", "\"${secret("ANTHROPIC_API_KEY")}\"")
         buildConfigField("String", "ELEVENLABS_API_KEY", "\"${secret("ELEVENLABS_API_KEY")}\"")
         buildConfigField("String", "ELEVENLABS_VOICE_ID", "\"${secret("ELEVENLABS_VOICE_ID")}\"")
+        buildConfigField("String", "GOOGLE_MAPS_API_KEY", "\"${secret("GOOGLE_MAPS_API_KEY")}\"")
     }
 
     buildTypes {
@@ -79,4 +80,7 @@ dependencies {
 
     // openWakeWord on-device inference (Phase 1b)
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.18.0")
+
+    // Fused location for on-demand location awareness (D13)
+    implementation("com.google.android.gms:play-services-location:21.3.0")
 }

@@ -57,7 +57,7 @@ class ClaudeClient(
         tools: JSONArray,
         maxTokens: Int = 1024,
         maxRounds: Int = 4,
-        exec: (name: String, input: JSONObject) -> String
+        exec: suspend (name: String, input: JSONObject) -> String
     ): String? = withContext(Dispatchers.IO) {
         try {
             val messages = JSONArray()
@@ -122,6 +122,40 @@ class ClaudeClient(
         } catch (e: Exception) {
             Log.e(TAG, "Claude tool call failed", e)
             null
+        }
+    }
+
+    /**
+     * One-shot vision turn: sends [history] plus a final user message carrying an image and a
+     * [prompt], and returns Nova's text reply. Used when John feeds her a photo.
+     */
+    suspend fun respondWithImage(
+        system: String,
+        history: List<Turn>,
+        imageB64: String,
+        mediaType: String,
+        prompt: String,
+        model: String,
+        maxTokens: Int = 1024
+    ): String? = withContext(Dispatchers.IO) {
+        try {
+            val messages = JSONArray()
+            for (t in history) messages.put(JSONObject().put("role", t.role).put("content", t.content))
+            val content = JSONArray()
+            content.put(
+                JSONObject().put("type", "image").put(
+                    "source", JSONObject()
+                        .put("type", "base64").put("media_type", mediaType).put("data", imageB64)
+                )
+            )
+            content.put(JSONObject().put("type", "text").put("text", prompt))
+            messages.put(JSONObject().put("role", "user").put("content", content))
+            val payload = JSONObject()
+                .put("model", model).put("max_tokens", maxTokens)
+                .put("system", system).put("messages", messages)
+            postForText(payload)
+        } catch (e: Exception) {
+            Log.e(TAG, "Claude image call failed", e); null
         }
     }
 

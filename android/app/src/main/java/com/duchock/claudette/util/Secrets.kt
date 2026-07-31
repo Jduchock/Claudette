@@ -25,6 +25,9 @@ object Secrets {
     fun voiceId(c: Context): String =
         pick(Prefs.voiceId(c), BuildConfig.ELEVENLABS_VOICE_ID)
 
+    fun googleMapsKey(c: Context): String =
+        pick(SecretStore.get(c, SecretStore.KEY_GOOGLE_MAPS), BuildConfig.GOOGLE_MAPS_API_KEY)
+
     private fun pick(inApp: String?, baked: String): String =
         inApp?.takeIf { it.isNotBlank() } ?: baked
 }

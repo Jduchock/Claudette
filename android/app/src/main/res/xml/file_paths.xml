@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <cache-path name="nova_capture" path="." />
+    <files-path name="nova_media" path="nova_media/" />
+</paths>

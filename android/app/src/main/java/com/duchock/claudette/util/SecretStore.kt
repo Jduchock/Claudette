@@ -13,6 +13,7 @@ object SecretStore {
     private const val FILE = "claudette_secrets"
     const val KEY_ANTHROPIC = "anthropic_api_key"
     const val KEY_ELEVENLABS = "elevenlabs_api_key"
+    const val KEY_GOOGLE_MAPS = "google_maps_api_key"
 
     fun put(context: Context, key: String, value: String) =
         store(context).edit().putString(key, value).apply()

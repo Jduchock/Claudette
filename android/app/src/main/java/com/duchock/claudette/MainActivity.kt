@@ -3,14 +3,17 @@ package com.duchock.claudette
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -38,16 +41,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.duchock.claudette.media.ImageStore
 import com.duchock.claudette.service.WakeWordService
 import com.duchock.claudette.ui.SettingsActivity
 import com.duchock.claudette.util.DebugStatus
 import com.duchock.claudette.util.Prefs
 import com.duchock.claudette.util.Secrets
+import java.io.File
 
 class MainActivity : ComponentActivity() {
 
@@ -66,9 +73,15 @@ class MainActivity : ComponentActivity() {
 
         val permissions = buildList {
             add(Manifest.permission.RECORD_AUDIO)
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
+            add(Manifest.permission.ACCESS_COARSE_LOCATION)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
                 add(Manifest.permission.POST_NOTIFICATIONS)
         }.toTypedArray()
+
+        val bgLocationLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { /* best-effort: Nova works foreground-only without "Allow all the time" */ }
 
         val launcher = rememberLauncherForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
@@ -76,20 +89,39 @@ class MainActivity : ComponentActivity() {
             if (result[Manifest.permission.RECORD_AUDIO] == true) {
                 startListening(); listening = true
             } else listening = false
+            // If foreground location was granted, follow up for background ("Allow all the time")
+            // so Nova can check location even while running in the background. Best-effort.
+            val fgLocation = result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+            if (fgLocation && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                bgLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            }
         }
 
-        // On first entry, if we don't have the mic permission yet, ask for it. The launcher
-        // callback starts listening the moment the user grants it.
+        // ---- camera capture -> review (confirm / retake / cancel) -> feed to Nova ----
+        var captureFile by remember { mutableStateOf<File?>(null) }
+        var reviewFile by remember { mutableStateOf<File?>(null) }
+        val takePicture = rememberLauncherForActivityResult(
+            ActivityResultContracts.TakePicture()
+        ) { ok ->
+            if (ok) reviewFile = captureFile else captureFile?.delete()
+        }
+        fun launchCapture() {
+            val f = File.createTempFile("nova_cap_", ".jpg", cacheDir)
+            captureFile = f
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
+            takePicture.launch(uri)
+        }
+
+        // On first entry, if we don't have the mic permission yet, ask for it.
         LaunchedEffect(Unit) {
             if (!hasAudioPermission()) launcher.launch(permissions)
         }
 
-        // Auto-start listening every time the app comes to the foreground (ON_RESUME), as long
-        // as the mic permission is granted -- so Nova is live the instant you open the app, no
-        // tap required. Doing this on ON_RESUME (rather than during first composition) guarantees
-        // the activity is actually in the foreground, which is what lets Android start the
-        // microphone foreground service reliably. The service is idempotent, so calling this when
-        // it is already running is a harmless no-op.
+        // Auto-start listening whenever the app comes to the foreground (ON_RESUME).
         DisposableEffect(Unit) {
             val observer = LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_RESUME && hasAudioPermission()) {
@@ -98,6 +130,17 @@ class MainActivity : ComponentActivity() {
             }
             lifecycle.addObserver(observer)
             onDispose { lifecycle.removeObserver(observer) }
+        }
+
+        val toReview = reviewFile
+        if (toReview != null) {
+            PhotoReview(
+                file = toReview,
+                onConfirm = { sendImageToNova(toReview); reviewFile = null },
+                onRetake = { reviewFile = null; launchCapture() },
+                onCancel = { toReview.delete(); reviewFile = null }
+            )
+            return
         }
 
         Column(
@@ -129,6 +172,20 @@ class MainActivity : ComponentActivity() {
             }
 
             Spacer(Modifier.height(16.dp))
+            OutlinedButton(onClick = { launchCapture() }) {
+                Text("Give Nova a Picture")
+            }
+
+            Spacer(Modifier.height(16.dp))
+            OutlinedButton(onClick = { readBible() }) {
+                Text("Read the Bible (continue)")
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { stopReadingBible() }) {
+                Text("STOP reading")
+            }
+
+            Spacer(Modifier.height(16.dp))
             OutlinedButton(onClick = { testWake() }, enabled = listening) {
                 Text("Test wake (simulate)")
             }
@@ -139,10 +196,35 @@ class MainActivity : ComponentActivity() {
 
             Spacer(Modifier.height(24.dp))
             Text(
-                "Nova is listening in the background whenever the app has run once. Set your " +
-                    "Anthropic and ElevenLabs keys and a voice ID in Settings, then just say \"Nova\".",
+                "Nova is listening in the background whenever the app has run once. Say \"Nova\" to " +
+                    "talk, or tap \"Give Nova a Picture\" to show her something.",
                 style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center
             )
+        }
+    }
+
+    @Composable
+    private fun PhotoReview(file: File, onConfirm: () -> Unit, onRetake: () -> Unit, onCancel: () -> Unit) {
+        val bmp = remember(file.absolutePath) { BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap() }
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text("Send this to Nova?", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(16.dp))
+            if (bmp != null) {
+                Image(bmp, contentDescription = "Captured photo",
+                    modifier = Modifier.fillMaxWidth().height(360.dp))
+            } else {
+                Text("Couldn't load the photo.", style = MaterialTheme.typography.bodyMedium)
+            }
+            Spacer(Modifier.height(24.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(onClick = onConfirm) { Text("Confirm") }
+                OutlinedButton(onClick = onRetake) { Text("Retake") }
+                TextButton(onClick = onCancel) { Text("Cancel") }
+            }
         }
     }
 
@@ -182,5 +264,25 @@ class MainActivity : ComponentActivity() {
 
     private fun testWake() {
         startService(Intent(this, WakeWordService::class.java).setAction(WakeWordService.ACTION_TEST_WAKE))
+    }
+
+    /** Persist the confirmed photo and hand it to the service for analysis. */
+    private fun sendImageToNova(temp: File) {
+        val saved = ImageStore.save(this, temp.readBytes(), System.currentTimeMillis())
+        temp.delete()
+        startService(
+            Intent(this, WakeWordService::class.java)
+                .setAction(WakeWordService.ACTION_ANALYZE_IMAGE)
+                .putExtra(WakeWordService.EXTRA_IMAGE_PATH, saved.absolutePath)
+        )
+        DebugStatus.event("Sent a photo to Nova…")
+    }
+
+    private fun readBible() {
+        startService(Intent(this, WakeWordService::class.java).setAction(WakeWordService.ACTION_START_READING))
+    }
+
+    private fun stopReadingBible() {
+        startService(Intent(this, WakeWordService::class.java).setAction(WakeWordService.ACTION_STOP_READING))
     }
 }
