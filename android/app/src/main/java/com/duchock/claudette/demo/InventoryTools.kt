@@ -1,5 +1,6 @@
 package com.duchock.claudette.demo
 
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -13,6 +14,7 @@ import org.json.JSONObject
  * raw rows -- this is what stops false "out of stock" calls.
  */
 object InventoryTools {
+    private const val TAG = "NovaTools"
 
     fun schema(): JSONArray {
         val tools = JSONArray()
@@ -26,8 +28,8 @@ object InventoryTools {
                         "and/or colorway -- word order and partial colors are fine, e.g. 'Kobe 5 in white and purple'), " +
                         "and/or by an exact identifier (SKU like HB-4101174, a UPC, or an Item ID like ITM-700156) " +
                         "passed in 'identifier'. Optionally narrow by size. Returns a 'summary' (in-stock sizes and " +
-                        "unit counts at the home store 0146 and at each nearby store, plus anyInStock) and per-size " +
-                        "'items' with back-room shelf locations at 0146. A count of null means the store does not carry " +
+                        "unit counts at the home store 1511 and at each nearby store, plus anyInStock) and per-size " +
+                        "'items' with back-room shelf locations at 1511. A count of null means the store does not carry " +
                         "that item; 0 means carried but out of stock. Use digits for sizes (10.5, not 'ten and a half')."
                 )
                 .put(
@@ -49,8 +51,8 @@ object InventoryTools {
                 .put("name", "store_rollup")
                 .put(
                     "description",
-                    "Total units on hand across the four stores, optionally filtered by brand, category, or gender. " +
-                        "Returns per-store totals (0146 home plus three nearby), the chain total, and how many styles match."
+                    "Total units on hand across the six stores, optionally filtered by brand, category, or gender. " +
+                        "Returns per-store totals (1511 home plus five others), the chain total, and how many styles match."
                 )
                 .put(
                     "input_schema", JSONObject()
@@ -89,15 +91,18 @@ object InventoryTools {
     }
 
     fun execute(name: String, input: JSONObject): String {
+        Log.i(TAG, "execute name=$name loaded=${InventoryRepo.isLoaded()} input=${input.toString().take(200)}")
         if (!InventoryRepo.isLoaded()) {
             return JSONObject().put("error", "inventory not loaded yet, ask again in a moment").toString()
         }
-        return when (name) {
+        val out = when (name) {
             "check_stock" -> checkStock(input)
             "store_rollup" -> storeRollup(input)
             "pricing_lookup" -> pricing(input)
             else -> JSONObject().put("error", "unknown tool $name").toString()
         }
+        Log.i(TAG, "execute name=$name -> ${out.length} chars")
+        return out
     }
 
     private fun checkStock(input: JSONObject): String {
@@ -152,7 +157,7 @@ object InventoryTools {
             o.put("onHand", oh)
             if (it.loc != null) {
                 o.put(
-                    "location0146", JSONObject()
+                    "homeLocation", JSONObject()
                         .put("locId", it.loc.locId).put("shelf", it.loc.shelfLabel)
                         .put("reach", it.loc.reach).put("backRoom", it.loc.backRoom)
                         .put("salesFloor", it.loc.salesFloor).put("status", it.loc.status)

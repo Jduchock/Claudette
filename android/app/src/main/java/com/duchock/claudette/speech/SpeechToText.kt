@@ -5,4 +5,6 @@ interface SpeechToText {
     /** Suspends until one utterance is transcribed; returns null on no-speech/error. */
     suspend fun listenOnce(): String?
     fun cancel()
+    /** Immediately end any in-flight [listenOnce] (resumes it with null). Default no-op. */
+    fun interrupt() {}
 }

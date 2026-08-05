@@ -10,6 +10,10 @@ import kotlin.concurrent.thread
 /**
  * Captures 16 kHz / mono / 16-bit PCM audio and delivers it in fixed-size frames on a
  * background thread. Nothing is written to disk (ref threat S2).
+ *
+ * start() reports success so the service can retry if the mic wasn't free yet (e.g. a
+ * SpeechRecognizer from the last turn is still releasing it). stop() is safe to call from the
+ * capture thread itself (the wake callback runs there), so it never joins itself.
  */
 class AudioCapture(
     private val frameSize: Int,
@@ -20,25 +24,35 @@ class AudioCapture(
     private var worker: Thread? = null
 
     @SuppressLint("MissingPermission") // RECORD_AUDIO is verified before start()
-    fun start() {
-        if (running) return
+    fun start(): Boolean {
+        if (running) return true
         val minBuf = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
         val bufferSize = maxOf(minBuf, frameSize * 2 * 4)
-        val rec = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
-            bufferSize
-        )
+        val rec = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "AudioRecord construction failed", e); return false
+        }
         if (rec.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e(TAG, "AudioRecord failed to initialize")
-            rec.release()
-            return
+            Log.e(TAG, "AudioRecord failed to initialize (mic busy?)")
+            runCatching { rec.release() }
+            return false
         }
         recorder = rec
         running = true
-        rec.startRecording()
+        try {
+            rec.startRecording()
+        } catch (e: Exception) {
+            Log.e(TAG, "startRecording failed", e)
+            running = false; runCatching { rec.release() }; recorder = null
+            return false
+        }
         worker = thread(name = "claudette-audio") {
             val buf = ShortArray(frameSize)
             var dbgFrames = 0
@@ -46,12 +60,11 @@ class AudioCapture(
             while (running) {
                 var read = 0
                 while (read < frameSize && running) {
-                    val n = rec.read(buf, read, frameSize - read)
+                    val n = try { rec.read(buf, read, frameSize - read) } catch (e: Exception) { -1 }
                     if (n <= 0) break
                     read += n
                 }
                 if (read == frameSize) {
-                    // DEBUG mic level meter: peak sample amplitude, logged ~every 2s
                     for (i in 0 until frameSize) {
                         val amp = kotlin.math.abs(buf[i].toInt())
                         if (amp > dbgPeak) dbgPeak = amp
@@ -64,15 +77,20 @@ class AudioCapture(
                 }
             }
         }
+        return true
     }
 
     fun stop() {
         running = false
-        worker?.join(500)
+        val w = worker
         worker = null
-        recorder?.run {
-            runCatching { stop() }
-            release()
+        // The wake callback calls stop() from the capture thread itself -- never join self.
+        if (w != null && w !== Thread.currentThread()) {
+            runCatching { w.join(500) }
+        }
+        recorder?.let { rec ->
+            runCatching { rec.stop() }
+            runCatching { rec.release() }
         }
         recorder = null
     }

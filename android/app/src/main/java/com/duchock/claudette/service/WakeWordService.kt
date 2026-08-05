@@ -35,6 +35,7 @@ import com.duchock.claudette.util.Prefs
 import com.duchock.claudette.util.Secrets
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -61,7 +62,7 @@ class WakeWordService : LifecycleService() {
 
     private val inConversation = AtomicBoolean(false)
     private var conversationJob: Job? = null
-    @Volatile private var currentConversation: ConversationManager? = null
+    @Volatile private var pendingImagePath: String? = null
     @Volatile private var reading = false
     private var readingJob: Job? = null
 
@@ -84,6 +85,7 @@ class WakeWordService : LifecycleService() {
         // Warm the demo inventory dataset and the King James Version off the main thread.
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Default) {
             com.duchock.claudette.demo.InventoryRepo.ensureLoaded(applicationContext)
+            DebugStatus.inventoryLoaded = true
             BibleRepo.ensureLoaded(applicationContext)
         }
     }
@@ -112,11 +114,24 @@ class WakeWordService : LifecycleService() {
 
     private fun startCapture() {
         if (capture != null || inConversation.get()) return
-        capture = AudioCapture(detector.frameSize) { frame ->
+        val cap = AudioCapture(detector.frameSize) { frame ->
             val result = detector.process(frame)
             DebugStatus.lastWakeScore = result.score
             if (result.detected) onWakeDetected()
-        }.also { it.start() }
+        }
+        if (cap.start()) {
+            capture = cap
+        } else {
+            // Mic wasn't free yet (e.g. a SpeechRecognizer from the last turn is still releasing
+            // it). Retry shortly so wake-word listening reliably comes back.
+            DebugStatus.event("Mic busy — retrying capture")
+            lifecycleScope.launch {
+                kotlinx.coroutines.delay(500)
+                if (capture == null && !inConversation.get() && Prefs.isListeningEnabled(this@WakeWordService)) {
+                    startCapture()
+                }
+            }
+        }
     }
 
     private fun stopCapture() { capture?.stop(); capture = null }
@@ -132,11 +147,22 @@ class WakeWordService : LifecycleService() {
         Log.i(TAG, "Listening stopped")
     }
 
-    /** Wake fired -> run the conversation loop. */
+    /** Wake fired -> open the conversation loop. */
     private fun onWakeDetected() {
-        if (!inConversation.compareAndSet(false, true)) return
-        Log.i(TAG, "Wake word 'Nova' detected")
         DebugStatus.event("Wake detected (%.2f)".format(DebugStatus.lastWakeScore))
+        beginConversation(fromWake = true)
+    }
+
+    /**
+     * Opens the turn-to-turn conversation loop (or is a no-op if one is already running). The loop
+     * stays open after EVERY turn -- spoken or photo -- so John can always answer by voice without
+     * saying "Nova" again. A photo queued in [pendingImagePath] is handled first, in-context, and the
+     * loop keeps the same [ConversationManager] so the picture and everything said around it are
+     * remembered for the rest of the conversation.
+     */
+    private fun beginConversation(fromWake: Boolean) {
+        if (!inConversation.compareAndSet(false, true)) return
+        if (fromWake) Log.i(TAG, "Wake word 'Nova' detected")
         if (reading) stopReading()
         stopCapture() // free the mic for SpeechRecognizer
 
@@ -153,7 +179,9 @@ class WakeWordService : LifecycleService() {
 
         val claude = ClaudeClient(anthropicKey, http)
         val eleven = ElevenLabsClient(elevenKey, http)
-        val conversation = currentConversation ?: ConversationManager(claude).also { currentConversation = it }
+        // Reuse the process-level conversation so memory survives a mic off/on within this app run
+        // (it still self-expires after the ConversationManager idle window; lost only if the OS kills us).
+        val conversation = heldConversation ?: ConversationManager(claude).also { heldConversation = it }
 
         updateNotification(CONVERSING_TEXT)
         conversationJob = lifecycleScope.launch {
@@ -161,9 +189,21 @@ class WakeWordService : LifecycleService() {
             try {
                 var emptyStreak = 0
                 while (inConversation.get()) {
+                    // A photo (handed in now, or mid-conversation) is handled first, in-context.
+                    val img = pendingImagePath
+                    if (img != null) {
+                        pendingImagePath = null
+                        emptyStreak = 0
+                        speakImageTurn(img, conversation, eleven, voiceId)
+                        continue
+                    }
+
                     DebugStatus.event("Listening for your request…")
-                    val utterance = stt.listenOnce()
+                    // Hard cap so a wedged recognizer can never hang the loop (STT also self-guards).
+                    val utterance = withTimeoutOrNull(20_000L) { stt.listenOnce() }
                     if (utterance.isNullOrBlank()) {
+                        // A photo may have interrupted the listen -- loop back to handle it first.
+                        if (pendingImagePath != null) continue
                         // two silent listens in a row -> assume the user walked away
                         DebugStatus.event("Heard nothing")
                         if (++emptyStreak >= 2) break else continue
@@ -177,8 +217,10 @@ class WakeWordService : LifecycleService() {
                     val readAt = BibleControl.readingStart(utterance, this@WakeWordService)
                     if (readAt != null) { startReadingAt = readAt; break }
                     DebugStatus.event("Thinking…")
+                    Log.i(TAG, "TURN demo=${com.duchock.claudette.demo.DemoMode.active} utterance=\"${utterance.take(80)}\"")
                     val reply = conversation.handle(utterance)
                     if (reply == null) {
+                        Log.e(TAG, "handle() returned null demo=${com.duchock.claudette.demo.DemoMode.active} lastError=${DebugStatus.lastError}")
                         DebugStatus.event("Claude call failed (see ClaudeClient log)")
                         eleven.synthesize("Sorry, I hit a snag reaching my brain. Try me again.", voiceId)
                             ?.let { tts.play(it) }
@@ -202,39 +244,62 @@ class WakeWordService : LifecycleService() {
         }
     }
 
+    /** Analyze a queued photo as one conversation turn, speak the result; the loop then listens again. */
+    private suspend fun speakImageTurn(
+        path: String,
+        conversation: ConversationManager,
+        eleven: ElevenLabsClient,
+        voiceId: String
+    ) {
+        try {
+            val bytes = File(path).readBytes()
+            val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+            DebugStatus.event("Looking at your photo…")
+            Log.i(TAG, "IMAGE_TURN demo=${com.duchock.claudette.demo.DemoMode.active} bytes=${bytes.size} b64=${b64.length}")
+            val reply = conversation.handleImage(b64, "image/jpeg")
+            if (reply.isNullOrBlank()) {
+                Log.e(TAG, "handleImage null lastError=${DebugStatus.lastError}")
+                DebugStatus.event("Couldn't read that image")
+                eleven.synthesize("Sorry, I couldn't get a good look at that one. Want to try again?", voiceId)?.let { tts.play(it) }
+                return
+            }
+            DebugStatus.event("Speaking: \"${reply.take(60)}\"")
+            eleven.synthesize(reply, voiceId)?.let { tts.play(it) }
+        } catch (e: Exception) {
+            Log.e(TAG, "speakImageTurn failed", e); DebugStatus.event("Image error: ${e.message}")
+        }
+    }
+
     private fun endConversation() {
         inConversation.set(false)
         stt.cancel()
         if (Prefs.isListeningEnabled(this)) {
             updateNotification(LISTENING_TEXT)
-            startCapture()
+            // Let SpeechRecognizer fully release the mic before the wake-word AudioRecord grabs it.
+            lifecycleScope.launch {
+                kotlinx.coroutines.delay(400)
+                if (!inConversation.get()) startCapture()
+            }
         }
     }
 
-    /** John fed Nova a photo from the UI: analyze it, fold it into the conversation, speak her read. */
+    /**
+     * John handed Nova a photo from the UI. Queue it and make sure a conversation is open: if one is
+     * already running, interrupt the current listen so the photo folds into THIS conversation; if not,
+     * open a conversation that starts with the photo. Either way she keeps listening afterward, so John
+     * can respond by voice, and the picture stays in context for the rest of the conversation.
+     */
     private fun analyzeImage(path: String?) {
         if (path.isNullOrBlank()) return
-        val anthropicKey = Secrets.anthropicKey(this)
-        val elevenKey = Secrets.elevenLabsKey(this)
-        val voiceId = Secrets.voiceId(this)
-        if (anthropicKey.isBlank()) { DebugStatus.event("Missing Anthropic key — check Settings"); return }
-        val convo = currentConversation
-            ?: ConversationManager(ClaudeClient(anthropicKey, http)).also { currentConversation = it }
-        val eleven = if (elevenKey.isNotBlank()) ElevenLabsClient(elevenKey, http) else null
-        lifecycleScope.launch {
-            try {
-                val bytes = File(path).readBytes()
-                val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                DebugStatus.event("Looking at your photo…")
-                val reply = convo.handleImage(b64, "image/jpeg")
-                if (reply.isNullOrBlank()) { DebugStatus.event("Couldn't read that image"); return@launch }
-                DebugStatus.event("Nova: ${reply.take(80)}")
-                if (eleven != null && voiceId.isNotBlank()) {
-                    eleven.synthesize(reply, voiceId)?.let { tts.play(it) }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "analyzeImage failed", e); DebugStatus.event("Image error: ${e.message}")
-            }
+        if (Secrets.anthropicKey(this).isBlank()) { DebugStatus.event("Missing Anthropic key — check Settings"); return }
+        pendingImagePath = path
+        DebugStatus.event("Got a photo…")
+        Log.i(TAG, "ANALYZE_IMAGE queued inConversation=${inConversation.get()} path=$path")
+        if (inConversation.get()) {
+            // Mid-conversation: break the current listen so the loop picks up the photo right away.
+            stt.interrupt()
+        } else {
+            beginConversation(fromWake = false)
         }
     }
 
@@ -345,6 +410,8 @@ class WakeWordService : LifecycleService() {
 
     companion object {
         private const val TAG = "WakeWordService"
+        // Process-level so it outlives a single service instance (mic off/on) but not the process.
+        @Volatile private var heldConversation: ConversationManager? = null
         private const val NOTIF_ID = 1001
         private const val LISTENING_TEXT = "Listening -- say \"Nova\""
         private const val CONVERSING_TEXT = "Listening to you..."

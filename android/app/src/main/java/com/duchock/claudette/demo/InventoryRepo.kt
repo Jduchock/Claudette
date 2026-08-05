@@ -5,21 +5,23 @@ import android.util.Log
 import org.json.JSONObject
 
 /**
- * Loads the synthetic shoe-inventory demo dataset (assets/inventory_demo.json) and answers
- * inventory questions DETERMINISTICALLY in Kotlin -- Nova's counts and shelf locations come
- * from real filtering here, never from the model's own arithmetic. Backs the demo tools
- * (see InventoryTools).
+ * Loads the MFCS footwear demo dataset (assets/inventory_demo.json) and answers inventory
+ * questions DETERMINISTICALLY in Kotlin -- Nova's counts and shelf locations come from real
+ * filtering here, never from the model's own arithmetic. Backs the demo tools (InventoryTools).
  *
- * Matching is deliberately forgiving: exact lookup by SKU / UPC / Item ID, and word-order
- * independent, stopword-stripped token matching across brand + model + description + color,
- * so loose phrasings ("Kobe 5 in white and purple") still land.
+ * Lookup is deliberately forgiving:
+ *  - Exact SKU / UPC / Item ID (MFCS SKUs are 8-digit numbers).
+ *  - Numeric SKUs are also matched even when speech-to-text splits or groups the digits
+ *    ("38 464 624"), spells them out ("three eight four six ..."), or appends a size.
+ *  - Otherwise, word-order-independent, stopword-stripped token matching across
+ *    brand + model + description + color, so loose phrasings still land.
  *
- * Home store is 0146 (Trussville Marketplace, Hibbett); 1382 / 2071 / 3719 are "nearby".
+ * Home store is 1511 (Homewood/Wildwood, Hibbett); 33/54/513/966 are nearby Birmingham stores; 107 (Sebring FL) is a distant outlier store.
  */
 object InventoryRepo {
 
-    const val HOME = "0146"
-    val STORE_IDS = listOf("0146", "1382", "2071", "3719")
+    const val HOME = "1511"
+    val STORE_IDS = listOf("1511", "33", "54", "513", "966", "107")
 
     data class Store(
         val number: String, val name: String, val city: String, val state: String,
@@ -119,6 +121,32 @@ object InventoryRepo {
     /** ID form: strip everything but letters+digits, lowercase. "HB-4101174" -> "hb4101174". */
     private fun normId(s: String): String = s.lowercase().replace(Regex("[^a-z0-9]"), "")
 
+    /** Digits only -- for numeric SKU / Item ID matching. */
+    private fun digitsOnly(s: String?): String = (s ?: "").replace(Regex("[^0-9]"), "")
+
+    private val NUMWORD = mapOf(
+        "zero" to "0", "oh" to "0", "one" to "1", "two" to "2", "three" to "3",
+        "four" to "4", "five" to "5", "six" to "6", "seven" to "7", "eight" to "8", "nine" to "9"
+    )
+
+    /**
+     * Turn a spoken/typed string into a digit string, so a SKU survives however STT rendered it:
+     * kept if already digits ("38464624"), joined if grouped ("38 464 624"), and converted if
+     * spelled out ("three eight four six four six two four"). Non-number words are dropped.
+     */
+    private fun spokenToDigits(s: String?): String {
+        if (s.isNullOrBlank()) return ""
+        val sb = StringBuilder()
+        for (tok in s.lowercase().split(Regex("[^a-z0-9]+"))) {
+            when {
+                tok.isBlank() -> {}
+                tok.all { it.isDigit() } -> sb.append(tok)
+                NUMWORD.containsKey(tok) -> sb.append(NUMWORD[tok])
+            }
+        }
+        return sb.toString()
+    }
+
     private fun sizeNorm(s: String) = s.lowercase().trim().removeSuffix(".0")
 
     private fun tokens(s: String?): List<String> {
@@ -134,34 +162,60 @@ object InventoryRepo {
         val n = normId(raw)
         if (n.length < 5) return false
         val digits = n.count { it.isDigit() }
-        return digits >= 4 && (n.any { it.isLetter() } || digits >= 8)
+        // letter+digit codes (e.g. HB4101174), or a run of >=6 digits (MFCS numeric item numbers)
+        return (n.any { it.isLetter() } && digits >= 3) || digits >= 6
     }
 
+    /** Exact whole-token match on SKU / UPC / Item ID / style (parent) number. */
     private fun idHits(candidates: List<String>): List<Item> {
         val wanted = candidates.map { normId(it) }.filter { it.length >= 5 }.toSet()
         if (wanted.isEmpty()) return emptyList()
         return items.filter {
-            normId(it.sku) in wanted || normId(it.upc) in wanted || normId(it.itemId) in wanted
+            normId(it.sku) in wanted || normId(it.upc) in wanted ||
+                normId(it.itemId) in wanted || normId(it.style) in wanted
+        }
+    }
+
+    /**
+     * Numeric fallback: find any item whose SKU / Item ID digits appear as a run inside [qd]
+     * (the digit string distilled from the spoken query). Survives STT grouping / spelled-out
+     * digits and a trailing size, e.g. qd "2759114885" still contains SKU "27591148".
+     */
+    private fun idHitsByDigits(qd: String): List<Item> {
+        if (qd.length < 6) return emptyList()
+        return items.filter {
+            val s = digitsOnly(it.sku)
+            val id = digitsOnly(it.itemId)
+            (s.length >= 6 && qd.contains(s)) || (id.length >= 6 && qd.contains(id))
         }
     }
 
     /**
      * Flexible stock search. Tries an exact identifier match first (SKU/UPC/Item ID given in
-     * [identifier] or embedded in [query]); otherwise falls back to token matching across
-     * brand/model/description/color, with [color] folded into the tokens so partial colorways
-     * work regardless of word order. [size] (if given) is applied on top.
+     * [identifier] or embedded in [query]); then a numeric-digit fallback for spoken SKUs;
+     * otherwise falls back to token matching across brand/model/description/color, with [color]
+     * folded into the tokens so partial colorways work regardless of word order. [size] applies on top.
      */
     fun search(query: String?, size: String?, color: String?, identifier: String?, limit: Int = 60): List<Item> {
-        // 1) identifier path
+        // 1) identifier path -- exact whole-token match
         val idCands = ArrayList<String>()
         if (!identifier.isNullOrBlank()) idCands.add(identifier)
         query?.split(Regex("\\s+"))?.forEach { if (looksLikeId(it)) idCands.add(it) }
-        val hits = idHits(idCands)
+        var hits = idHits(idCands)
+        // 1b) numeric fallback for spoken / grouped / spelled-out SKUs
+        if (hits.isEmpty()) {
+            val qd = spokenToDigits((identifier ?: "") + " " + (query ?: ""))
+            hits = idHitsByDigits(qd)
+        }
         if (hits.isNotEmpty()) {
-            return hits.filter { size.isNullOrBlank() || sizeNorm(it.size) == sizeNorm(size) }.take(limit)
+            // if a size was also given, prefer that size; but a SKU already pins the exact size,
+            // so never return empty just because a spoken size didn't line up.
+            val bySize = hits.filter { size.isNullOrBlank() || sizeNorm(it.size) == sizeNorm(size) }
+            return (if (bySize.isNotEmpty()) bySize else hits).take(limit)
         }
         // 2) token path (query + color folded together)
         val toks = (tokens(query) + tokens(color)).distinct()
+        if (toks.isEmpty()) return emptyList()
         val res = items.filter { it ->
             val hay = haystack(it)
             toks.all { hay.contains(it) } &&

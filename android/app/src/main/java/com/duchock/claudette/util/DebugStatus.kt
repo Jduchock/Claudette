@@ -15,5 +15,13 @@ object DebugStatus {
     var lastWakeScore by mutableStateOf(0f)
     var lastEvent by mutableStateOf("Idle")
 
+    // Demo-mode readiness surfaced on the main screen so John can see Nova is ready to demo:
+    // whether the store-demo persona is active, whether the shoe database has finished loading,
+    // and whether she is currently analyzing a demo photo.
+    var demoMode by mutableStateOf(false)
+    var inventoryLoaded by mutableStateOf(false)
+    var analyzingImage by mutableStateOf(false)
+    var lastError by mutableStateOf("")   // most recent API error, blank when last call succeeded
+
     fun event(msg: String) { lastEvent = msg }
 }

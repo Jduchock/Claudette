@@ -148,6 +148,7 @@ class MainActivity : ComponentActivity() {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            DemoBanner()
             Text("Nova", style = MaterialTheme.typography.displaySmall)
             Spacer(Modifier.height(8.dp))
             Text(
@@ -203,6 +204,38 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Store-demo indicator. Only shows while Nova is in demo mode, so John can see at a glance that
+     * she is ready to reference the shoe database and take a demo picture. Reads live Compose state
+     * from DebugStatus, so it appears/updates automatically as demo mode toggles.
+     */
+    @Composable
+    private fun DemoBanner() {
+        if (!DebugStatus.demoMode) return
+        Surface(
+            color = MaterialTheme.colorScheme.primaryContainer,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
+        ) {
+            Column(
+                Modifier.fillMaxWidth().padding(14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                val onColor = MaterialTheme.colorScheme.onPrimaryContainer
+                Text("●  DEMO MODE", style = MaterialTheme.typography.titleMedium, color = onColor)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    if (DebugStatus.inventoryLoaded) "Shoe database: ready ✓" else "Shoe database: loading…",
+                    style = MaterialTheme.typography.bodySmall, color = onColor
+                )
+                Text(
+                    if (DebugStatus.analyzingImage) "Matching a demo photo…" else "Ready for a demo picture",
+                    style = MaterialTheme.typography.bodySmall, color = onColor
+                )
+            }
+        }
+    }
+
     @Composable
     private fun PhotoReview(file: File, onConfirm: () -> Unit, onRetake: () -> Unit, onCancel: () -> Unit) {
         val bmp = remember(file.absolutePath) { BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap() }
@@ -244,6 +277,8 @@ class MainActivity : ComponentActivity() {
                 Text("Wake score: " + "%.2f".format(DebugStatus.lastWakeScore), style = small)
                 Spacer(Modifier.height(4.dp))
                 Text("Last: " + DebugStatus.lastEvent, style = small)
+                if (DebugStatus.lastError.isNotBlank())
+                    Text("Err: " + DebugStatus.lastError, style = small)
             }
         }
     }

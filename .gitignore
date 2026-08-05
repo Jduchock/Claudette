@@ -11,3 +11,10 @@ local.properties
 # Never commit secrets
 *.token
 secrets.properties
+.env
+# MFCS schema explorer
+mfcs/schemas/
+__pycache__/
+
+# session backups
+*.bak0146

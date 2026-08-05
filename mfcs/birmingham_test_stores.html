@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Claudette MFCS — Birmingham Test Store Cluster</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+ :root{--bg:#0f1115;--card:#1a1d24;--ink:#e8eaed;--mut:#9aa0aa;--acc:#4a9eff;}
+ *{box-sizing:border-box} html,body{margin:0;height:100%;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+ .wrap{display:flex;flex-direction:column;height:100%}
+ header{padding:14px 18px;border-bottom:1px solid #262a33}
+ h1{margin:0;font-size:17px} .sub{color:var(--mut);font-size:13px;margin-top:3px}
+ .main{flex:1;display:flex;min-height:0}
+ #map{flex:1;min-height:320px}
+ .side{width:320px;overflow:auto;border-left:1px solid #262a33;padding:10px 12px}
+ .s{background:var(--card);border:1px solid #262a33;border-radius:9px;padding:10px 11px;margin-bottom:9px}
+ .s b{color:var(--acc)} .s .m{color:var(--mut);font-size:12px;line-height:1.5;margin-top:3px}
+ .badge{display:inline-block;background:#232733;color:#cfd4dd;border-radius:5px;padding:1px 7px;font-size:11px;margin-right:4px;margin-top:5px}
+ @media(max-width:720px){.main{flex-direction:column}.side{width:auto;border-left:none;border-top:1px solid #262a33;max-height:44%}}
+</style></head>
+<body><div class="wrap">
+<header><h1>Birmingham, AL — 5 Main Test Stores (District 25 · Region 1)</h1>
+<div class="sub">Tightest real-store cluster in the chain · max 6.4 mi apart · pins at ZIP centroids (approx.)</div></header>
+<div class="main"><div id="map"></div><div class="side" id="side"></div></div></div>
+<script>
+var pins=[{"store": 33, "name": "H -WESTERN HILLS", "lat": 33.4735, "lon": -86.9183, "addr": "7201 AARON ARONOV DRIVE", "city": "FAIRFIELD", "zip": "35064", "fmt": "Fashion 1 (FS1)", "cls": "Class Stores D", "sqft": 5300, "opened": "1986-02-01"}, {"store": 54, "name": "SA-WEST.HILLS (SA)", "lat": 33.4775, "lon": -86.9143, "addr": "7201 AARON ARONOV DR", "city": "FAIRFIELD", "zip": "35064", "fmt": "Fashion 1 (FS1)", "cls": "Class Stores D", "sqft": 1530, "opened": "1993-05-22"}, {"store": 513, "name": "H -BIRMINGHAM, AL (5 PTS W)", "lat": 33.4977, "lon": -86.8799, "addr": "2245 BESSEMER ROAD", "city": "BIRMINGHAM", "zip": "35208", "fmt": "Fashion 1 (FS1)", "cls": "Class Stores D", "sqft": 4086, "opened": "2005-01-29"}, {"store": 966, "name": "H -BIRMINGHAM AL (PALISADES)", "lat": 33.4653, "lon": -86.8082, "addr": "352 PALISADES BLVD", "city": "BIRMINGHAM", "zip": "35209", "fmt": "Fashion 1 (FS1)", "cls": "Class Stores D", "sqft": 5191, "opened": "2010-12-10"}, {"store": 1511, "name": "H -HOMEWOOD AL (WILDWOOD)", "lat": 33.4693, "lon": -86.8042, "addr": "225 LAKESHORE PKWY", "city": "HOMEWOOD", "zip": "35209", "fmt": "Fashion 2 (FS2)", "cls": "Class Stores E", "sqft": 6269, "opened": "2022-01-25"}];
+var map=L.map('map');
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
+ attribution:'&copy; OpenStreetMap &copy; CARTO',maxZoom:19}).addTo(map);
+var grp=[];var side=document.getElementById('side');
+pins.forEach(function(p){
+ var m=L.circleMarker([p.lat,p.lon],{radius:9,color:'#4a9eff',fillColor:'#4a9eff',fillOpacity:.85,weight:2}).addTo(map);
+ m.bindPopup('<b>#'+p.store+'</b> '+p.name+'<br>'+p.addr+'<br>'+p.city+' '+p.zip);
+ grp.push([p.lat,p.lon]);
+ var el=document.createElement('div');el.className='s';
+ el.innerHTML='<b>#'+p.store+'</b> '+p.name+
+  '<div class="m">'+p.addr+'<br>'+p.city+', '+p.zip+'</div>'+
+  '<span class="badge">'+p.fmt+'</span><span class="badge">'+p.cls+'</span>'+
+  '<span class="badge">'+p.sqft+' sqft</span><span class="badge">opened '+p.opened+'</span>';
+ el.onclick=function(){map.setView([p.lat,p.lon],14);m.openPopup();};
+ side.appendChild(el);
+});
+map.fitBounds(grp,{padding:[45,45]});
+</script></body></html>
